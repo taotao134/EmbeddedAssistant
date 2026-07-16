@@ -7,6 +7,18 @@ namespace DeviceDebugStudio.Tests;
 public sealed class CommunicationSessionTests
 {
     [Fact]
+    public async Task EmptySendIsRejectedBeforeEnteringTransport()
+    {
+        BlockingSendTransport transport = new();
+        await using CommunicationSession session = new("test", transport);
+        await session.ConnectAsync();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => session.SendAsync(ReadOnlyMemory<byte>.Empty).AsTask());
+
+        Assert.False(transport.SendStarted.Task.IsCompleted);
+    }
+
+    [Fact]
     public async Task DisconnectCancelsPendingSend()
     {
         BlockingSendTransport transport = new();

@@ -32,26 +32,47 @@ public partial class SettingsWindow : Window
 
     private void OnAppearanceCategoryPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount == 1)
-        {
-            AppearanceCategory.IsExpanded = !AppearanceCategory.IsExpanded;
-        }
+        AppearanceCategory.IsExpanded = !AppearanceCategory.IsExpanded;
         e.Handled = true;
     }
 
     private void OnTextColorSwatchClick(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: string color })
+        if (sender is Button { DataContext: ColorPaletteItem item })
         {
-            _viewModel.TerminalTextColor = color;
+            _viewModel.TerminalTextColor = item.Color;
         }
     }
 
     private void OnBackgroundColorSwatchClick(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: string color })
+        if (sender is Button { DataContext: ColorPaletteItem item })
         {
-            _viewModel.TerminalBackgroundColor = color;
+            _viewModel.TerminalBackgroundColor = item.Color;
+        }
+    }
+
+    private void OnTextColorSwatchDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is Button { DataContext: ColorPaletteItem item })
+        {
+            OpenColorPalette(
+                item.Color,
+                App.DefaultTerminalTextColor,
+                color => _viewModel.UpdateTerminalPaletteColor(item, color, true));
+            e.Handled = true;
+        }
+    }
+
+    private void OnBackgroundColorSwatchDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is Button { DataContext: ColorPaletteItem item })
+        {
+            OpenColorPalette(
+                item.Color,
+                App.DefaultTerminalBackgroundColor,
+                color => _viewModel.UpdateTerminalPaletteColor(item, color, false));
+            e.Handled = true;
         }
     }
 
@@ -117,9 +138,7 @@ public partial class SettingsWindow : Window
 
     private void OnResetClick(object sender, RoutedEventArgs e)
     {
-        _viewModel.TerminalFontSize = 12;
-        _viewModel.TerminalTextColor = App.DefaultTerminalTextColor;
-        _viewModel.TerminalBackgroundColor = App.DefaultTerminalBackgroundColor;
+        _viewModel.ResetTerminalDisplaySettings();
     }
 
     private void OnCloseClick(object sender, RoutedEventArgs e) => Close();

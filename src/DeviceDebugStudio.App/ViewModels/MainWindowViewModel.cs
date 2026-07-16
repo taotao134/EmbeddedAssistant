@@ -192,6 +192,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<TerminalRecordItem> TerminalRecords { get; } = [];
     public ObservableCollection<FrameRecordItem> FrameRecords { get; } = [];
     public ObservableCollection<QuickCommandItemViewModel> QuickCommands { get; } = [];
+    public ObservableCollection<ColorPaletteItem> TerminalTextPalette { get; } = [];
+    public ObservableCollection<ColorPaletteItem> TerminalBackgroundPalette { get; } = [];
     public ICollectionView QuickCommandsView { get; }
     public ObservableCollection<ModbusRegisterItem> ModbusRegisters { get; } = [];
 
@@ -430,6 +432,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         TerminalFontSize = Math.Clamp(Math.Round(settings.TerminalFontSize), 9, 28);
         TerminalTextColor = App.NormalizeTerminalColor(settings.TerminalTextColor, App.DefaultTerminalTextColor);
         TerminalBackgroundColor = App.NormalizeTerminalColor(settings.TerminalBackgroundColor, App.DefaultTerminalBackgroundColor);
+        LoadTerminalPalette(TerminalTextPalette, settings.TerminalTextPalette, App.DefaultTerminalTextPalette);
+        LoadTerminalPalette(TerminalBackgroundPalette, settings.TerminalBackgroundPalette, App.DefaultTerminalBackgroundPalette);
         App.ApplyTerminalColors(TerminalTextColor, TerminalBackgroundColor);
         UpdateAvailableTransportOptions();
         await ReloadProfilesAsync().ConfigureAwait(true);
@@ -699,13 +703,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         EnsureConnectionStateWorker();
     }
 
-    public bool CanSend => IsConnected
+    private bool CanUseConnectedSession => IsConnected
         && _session is not null
         && _connectedWorkspaceMode == SelectedWorkspaceMode.Mode;
 
-    private bool CanSendQuickCommand(QuickCommandItemViewModel? command) => CanSend && command is not null;
+    public bool CanSend => CanUseConnectedSession && !string.IsNullOrEmpty(SendText);
 
-    private bool CanToggleQuickRepeat(QuickCommandItemViewModel? command) => CanSend && command is not null;
+    private bool CanSendQuickCommand(QuickCommandItemViewModel? command) =>
+        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.Payload);
+
+    private bool CanToggleQuickRepeat(QuickCommandItemViewModel? command) =>
+        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.Payload);
 
     [RelayCommand(CanExecute = nameof(CanSend))]
     private async Task SendAsync()
@@ -934,7 +942,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             byte[] request = SelectedTransportKind is TransportKind.TcpClient or TransportKind.TcpServer
                 ? ModbusRequestBuilder.BuildTcp((ushort)ModbusTransactionId, (byte)ModbusUnitId, function, (ushort)ModbusAddress, (ushort)ModbusQuantityOrValue, values)
                 : ModbusRequestBuilder.BuildRtu((byte)ModbusUnitId, function, (ushort)ModbusAddress, (ushort)ModbusQuantityOrValue, values);
-            if (!CanSend)
+            if (!CanUseConnectedSession)
             {
                 throw new InvalidOperationException("请先建立连接。 ");
             }
@@ -1005,13 +1013,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             source.Dispose();
         }
         _repeatCommands.Clear();
-        await SaveActiveProfileSnapshotAsync(showStatus: false).ConfigureAwait(false);
-        await _lastProfileSaveTask.ConfigureAwait(false);
-        await _lastAppSettingsSaveTask.ConfigureAwait(false);
-        await SaveAppSettingsAsync().ConfigureAwait(false);
+        await SaveActiveProfileSnapshotAsync(showStatus: false).ConfigureAwait(true);
+        await _lastProfileSaveTask.ConfigureAwait(true);
+        await _lastAppSettingsSaveTask.ConfigureAwait(true);
+        await SaveAppSettingsAsync().ConfigureAwait(true);
         _connectionDesired = false;
         _connectionAttemptCancellation?.Cancel();
-        await DisconnectInternalAsync().ConfigureAwait(false);
+        await DisconnectInternalAsync().ConfigureAwait(true);
         _appSettingsSaveLock.Dispose();
     }
 
@@ -1081,6 +1089,53 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _appSettingsSaveTimer.Start();
     }
 
+    public void UpdateTerminalPaletteColor(ColorPaletteItem item, string color, bool isTextColor)
+    {
+        ObservableCollection<ColorPaletteItem> palette = isTextColor ? TerminalTextPalette : TerminalBackgroundPalette;
+        if (!palette.Contains(item) || !App.TryNormalizeTerminalColor(color, out string normalized))
+        {
+            return;
+        }
+
+        item.Color = normalized;
+        if (isTextColor)
+        {
+            TerminalTextColor = normalized;
+        }
+        else
+        {
+            TerminalBackgroundColor = normalized;
+        }
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
+    public void ResetTerminalDisplaySettings()
+    {
+        TerminalFontSize = 12;
+        TerminalTextColor = App.DefaultTerminalTextColor;
+        TerminalBackgroundColor = App.DefaultTerminalBackgroundColor;
+        LoadTerminalPalette(TerminalTextPalette, App.DefaultTerminalTextPalette, App.DefaultTerminalTextPalette);
+        LoadTerminalPalette(TerminalBackgroundPalette, App.DefaultTerminalBackgroundPalette, App.DefaultTerminalBackgroundPalette);
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
+    private static void LoadTerminalPalette(
+        ObservableCollection<ColorPaletteItem> target,
+        IReadOnlyList<string>? savedColors,
+        IReadOnlyList<string> defaultColors)
+    {
+        target.Clear();
+        for (int index = 0; index < defaultColors.Count; index++)
+        {
+            string candidate = savedColors is not null && index < savedColors.Count
+                ? savedColors[index]
+                : defaultColors[index];
+            target.Add(new ColorPaletteItem(App.NormalizeTerminalColor(candidate, defaultColors[index])));
+        }
+    }
+
     partial void OnSelectedWorkspaceModeChanged(WorkspaceModeOption value)
     {
         if (_connectedWorkspaceMode is not null && _connectedWorkspaceMode != value.Mode)
@@ -1121,6 +1176,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     partial void OnProfileNameChanged(string value) => ScheduleProfileSave();
+
+    partial void OnSendTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(CanSend));
+        SendCommand.NotifyCanExecuteChanged();
+    }
 
     partial void OnSendAsHexChanged(bool value)
     {
@@ -1184,6 +1245,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private void RefreshSendCommandAvailability()
     {
+        Dispatcher dispatcher = Application.Current.Dispatcher;
+        if (!dispatcher.CheckAccess())
+        {
+            if (!dispatcher.HasShutdownStarted && !dispatcher.HasShutdownFinished)
+            {
+                dispatcher.BeginInvoke(RefreshSendCommandAvailability, DispatcherPriority.Normal);
+            }
+            return;
+        }
+
         SendCommand.NotifyCanExecuteChanged();
         SendQuickCommandCommand.NotifyCanExecuteChanged();
         ToggleQuickRepeatCommand.NotifyCanExecuteChanged();
@@ -1443,7 +1514,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         try
         {
-            if (!CanSend)
+            if (!CanUseConnectedSession)
             {
                 throw new InvalidOperationException("请先建立连接。 ");
             }
@@ -1455,6 +1526,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             data.CopyTo(withEnding, 0);
             ending.CopyTo(withEnding, data.Length);
             byte[] final = ChecksumCalculator.Append(withEnding, checksum, littleEndian);
+            if (final.Length == 0)
+            {
+                StatusText = "发送内容为空";
+                return false;
+            }
             CommunicationSession session = _session ?? throw new InvalidOperationException("请先建立连接。 ");
             await session.SendAsync(final, sentAsHex: isHex).ConfigureAwait(true);
             StatusText = isHex
@@ -1467,7 +1543,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             StatusText = "发送已取消，连接状态已变化";
             return false;
         }
-        catch (Exception exception) when (exception is FormatException or InvalidOperationException or IOException)
+        catch (Exception exception) when (exception is FormatException or InvalidOperationException or IOException or ArgumentException)
         {
             StatusText = $"发送失败：{exception.Message}";
             return false;
@@ -2046,7 +2122,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 ProfileDirectory = _profileStore.DirectoryPath,
                 TerminalFontSize = TerminalFontSize,
                 TerminalTextColor = App.NormalizeTerminalColor(TerminalTextColor, App.DefaultTerminalTextColor),
-                TerminalBackgroundColor = App.NormalizeTerminalColor(TerminalBackgroundColor, App.DefaultTerminalBackgroundColor)
+                TerminalBackgroundColor = App.NormalizeTerminalColor(TerminalBackgroundColor, App.DefaultTerminalBackgroundColor),
+                TerminalTextPalette = TerminalTextPalette.Select(item => item.Color).ToList(),
+                TerminalBackgroundPalette = TerminalBackgroundPalette.Select(item => item.Color).ToList()
             }).ConfigureAwait(false);
         }
         finally

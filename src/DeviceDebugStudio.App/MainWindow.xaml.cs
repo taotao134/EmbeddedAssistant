@@ -9,6 +9,7 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using System.Windows.Media;
 using DeviceDebugStudio.App.ViewModels;
+using DeviceDebugStudio.Core.Transports;
 using DeviceDebugStudio.Infrastructure.Persistence;
 using DeviceDebugStudio.Infrastructure.Transports;
 using Microsoft.Win32;
@@ -120,16 +121,28 @@ public partial class MainWindow : Window
         for (int index = start; index < _viewModel.TerminalRecords.Count; index++)
         {
             TerminalRecordItem item = _viewModel.TerminalRecords[index];
-            builder.Append(item.TimeText)
-                .Append('\t')
-                .Append(item.DirectionText)
-                .Append('\t')
-                .Append(item.Endpoint)
-                .Append('\t')
-                .Append(item.Size)
-                .Append('\t');
+            string direction = item.Direction switch
+            {
+                PacketDirection.Send => "TX→◇",
+                PacketDirection.Receive => "RX←◆",
+                _ => item.DirectionText
+            };
+            string size = item.Size.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            builder.Append('[')
+                .Append(item.TimeText)
+                .Append("]\t")
+                .Append(direction)
+                .Append("\t[")
+                .Append(size)
+                .Append("]\t");
             string content = item.GetContinuousTextContent(_viewModel.ReceiveAsHex);
-            builder.Append(content);
+            string continuationPrefix = new string(' ', item.TimeText.Length + 2)
+                + '\t'
+                + new string(' ', direction.Length)
+                + '\t'
+                + new string(' ', size.Length + 2)
+                + '\t';
+            AppendAlignedContinuousContent(builder, content, continuationPrefix);
             if (!content.EndsWith('\r') && !content.EndsWith('\n'))
             {
                 builder.AppendLine();
@@ -155,6 +168,25 @@ public partial class MainWindow : Window
         else if (_viewModel.AutoScroll)
         {
             TerminalPlainTextBox.ScrollToEnd();
+        }
+    }
+
+    private static void AppendAlignedContinuousContent(StringBuilder builder, string content, string continuationPrefix)
+    {
+        for (int index = 0; index < content.Length; index++)
+        {
+            char current = content[index];
+            builder.Append(current);
+            if (current == '\r' && index + 1 < content.Length && content[index + 1] == '\n')
+            {
+                builder.Append('\n');
+                index++;
+            }
+
+            if ((current == '\r' || current == '\n') && index + 1 < content.Length)
+            {
+                builder.Append(continuationPrefix);
+            }
         }
     }
 

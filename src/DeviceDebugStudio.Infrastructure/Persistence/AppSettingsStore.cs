@@ -8,6 +8,10 @@ public sealed record AppSettings
     public double TerminalFontSize { get; init; } = 12;
     public string TerminalTextColor { get; init; } = "#E6EBE8";
     public string TerminalBackgroundColor { get; init; } = "#141817";
+    public List<string> TerminalTextPalette { get; init; } =
+        ["#E6EBE8", "#7FE2B8", "#F7C574", "#9CDCFE", "#DCDCAA", "#FF8F8F", "#C586C0", "#7AA2F7"];
+    public List<string> TerminalBackgroundPalette { get; init; } =
+        ["#141817", "#000000", "#1E293B", "#173A34", "#312544", "#443125", "#F5F5F5", "#FFFFFF"];
 }
 
 public sealed class AppSettingsStore

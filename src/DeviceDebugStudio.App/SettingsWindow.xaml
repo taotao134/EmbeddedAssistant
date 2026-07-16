@@ -97,19 +97,27 @@
                         <ColumnDefinition Width="112" />
                     </Grid.ColumnDefinitions>
                     <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="文字颜色" />
-                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#E6EBE8" Tag="#E6EBE8" ToolTip="#E6EBE8" Click="OnTextColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#7FE2B8" Tag="#7FE2B8" ToolTip="#7FE2B8" Click="OnTextColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#F7C574" Tag="#F7C574" ToolTip="#F7C574" Click="OnTextColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#9CDCFE" Tag="#9CDCFE" ToolTip="#9CDCFE" Click="OnTextColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#DCDCAA" Tag="#DCDCAA" ToolTip="#DCDCAA" Click="OnTextColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#FF8F8F" Tag="#FF8F8F" ToolTip="#FF8F8F" Click="OnTextColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#C586C0" Tag="#C586C0" ToolTip="#C586C0" Click="OnTextColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#7AA2F7" Tag="#7AA2F7" ToolTip="#7AA2F7" Click="OnTextColorSwatchClick" />
-                        <Button Width="28" Height="28" Padding="0" ToolTip="打开文字颜色调色盘" Click="OnOpenTextColorPaletteClick">
+                    <DockPanel Grid.Column="1" LastChildFill="True">
+                        <Button DockPanel.Dock="Right" Width="28" Height="28" Padding="0" ToolTip="打开文字颜色调色盘" Click="OnOpenTextColorPaletteClick">
                             <ui:SymbolIcon Symbol="Color20" />
                         </Button>
-                    </StackPanel>
+                        <ItemsControl ItemsSource="{Binding TerminalTextPalette}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Style="{StaticResource ColorSwatchButtonStyle}"
+                                            Background="{Binding Color}"
+                                            ToolTip="{Binding Color}"
+                                            Click="OnTextColorSwatchClick"
+                                            PreviewMouseDoubleClick="OnTextColorSwatchDoubleClick" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </DockPanel>
                     <TextBox x:Name="TerminalTextColorTextBox"
                              Grid.Column="2"
                              MaxLength="9"
@@ -126,19 +134,27 @@
                         <ColumnDefinition Width="112" />
                     </Grid.ColumnDefinitions>
                     <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="背景颜色" />
-                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#141817" Tag="#141817" ToolTip="#141817" Click="OnBackgroundColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#000000" Tag="#000000" ToolTip="#000000" Click="OnBackgroundColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#1E293B" Tag="#1E293B" ToolTip="#1E293B" Click="OnBackgroundColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#173A34" Tag="#173A34" ToolTip="#173A34" Click="OnBackgroundColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#312544" Tag="#312544" ToolTip="#312544" Click="OnBackgroundColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#443125" Tag="#443125" ToolTip="#443125" Click="OnBackgroundColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#F5F5F5" Tag="#F5F5F5" ToolTip="#F5F5F5" Click="OnBackgroundColorSwatchClick" />
-                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#FFFFFF" Tag="#FFFFFF" ToolTip="#FFFFFF" Click="OnBackgroundColorSwatchClick" />
-                        <Button Width="28" Height="28" Padding="0" ToolTip="打开背景颜色调色盘" Click="OnOpenBackgroundColorPaletteClick">
+                    <DockPanel Grid.Column="1" LastChildFill="True">
+                        <Button DockPanel.Dock="Right" Width="28" Height="28" Padding="0" ToolTip="打开背景颜色调色盘" Click="OnOpenBackgroundColorPaletteClick">
                             <ui:SymbolIcon Symbol="Color20" />
                         </Button>
-                    </StackPanel>
+                        <ItemsControl ItemsSource="{Binding TerminalBackgroundPalette}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Style="{StaticResource ColorSwatchButtonStyle}"
+                                            Background="{Binding Color}"
+                                            ToolTip="{Binding Color}"
+                                            Click="OnBackgroundColorSwatchClick"
+                                            PreviewMouseDoubleClick="OnBackgroundColorSwatchDoubleClick" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </DockPanel>
                     <TextBox x:Name="TerminalBackgroundColorTextBox"
                              Grid.Column="2"
                              MaxLength="9"

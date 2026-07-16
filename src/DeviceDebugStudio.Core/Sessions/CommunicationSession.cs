@@ -92,6 +92,11 @@ public sealed class CommunicationSession : IAsyncDisposable
         CancellationToken cancellationToken = default,
         bool? sentAsHex = null)
     {
+        if (data.IsEmpty)
+        {
+            throw new ArgumentException("发送数据不能为空。", nameof(data));
+        }
+
         CancellationToken sessionToken = _sessionCancellation?.Token
             ?? throw new InvalidOperationException("连接会话未启动。 ");
         using CancellationTokenSource linkedSource = CancellationTokenSource.CreateLinkedTokenSource(sessionToken, cancellationToken);
