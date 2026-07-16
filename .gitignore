@@ -1,0 +1,10 @@
+.tools/
+.vs/
+**/bin/
+**/obj/
+ReleasePackages/
+TestResults/
+*.user
+*.suo
+*.db-shm
+*.db-wal

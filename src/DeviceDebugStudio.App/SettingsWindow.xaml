@@ -1,0 +1,192 @@
+<Window x:Class="DeviceDebugStudio.App.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="设置"
+        Width="820"
+        Height="520"
+        MinWidth="720"
+        MinHeight="460"
+        WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <Style x:Key="ColorSwatchButtonStyle" TargetType="Button" BasedOn="{StaticResource RoundedButtonStyle}">
+            <Setter Property="Width" Value="28" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="MinHeight" Value="28" />
+            <Setter Property="Margin" Value="0,0,7,0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Background="{DynamicResource WorkspaceBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="190" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.RowSpan="2"
+                Background="{DynamicResource SidebarBackgroundBrush}"
+                BorderBrush="{DynamicResource DividerBrush}"
+                BorderThickness="0,0,1,0">
+            <Grid Margin="12,16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <TextBlock Margin="8,0,0,14" FontSize="18" FontWeight="SemiBold" Text="设置" />
+                <TreeView x:Name="SettingsNavigation"
+                          Grid.Row="1"
+                          BorderThickness="0"
+                          Background="Transparent"
+                          SelectedItemChanged="OnNavigationSelectedItemChanged">
+                    <TreeViewItem x:Name="AppearanceCategory" IsExpanded="True">
+                        <TreeViewItem.Header>
+                            <StackPanel Width="138" Background="Transparent" Orientation="Horizontal" PreviewMouseLeftButtonDown="OnAppearanceCategoryPreviewMouseLeftButtonDown">
+                                <ui:SymbolIcon Margin="0,0,7,0" Symbol="Color20" />
+                                <TextBlock FontWeight="SemiBold" Text="外观" />
+                            </StackPanel>
+                        </TreeViewItem.Header>
+                        <TreeViewItem Header="终端显示" Tag="TerminalDisplay" IsSelected="True" />
+                    </TreeViewItem>
+                </TreeView>
+            </Grid>
+        </Border>
+
+        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+            <Grid x:Name="TerminalDisplayPage" Margin="30,24,34,24">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock FontSize="20" FontWeight="SemiBold" Text="终端显示" />
+
+                <Grid Grid.Row="1" Margin="0,24,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="54" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="字体大小" />
+                    <Slider Grid.Column="1"
+                            Margin="0,0,14,0"
+                            Minimum="9"
+                            Maximum="28"
+                            TickFrequency="1"
+                            IsSnapToTickEnabled="True"
+                            IsMoveToPointEnabled="True"
+                            Value="{Binding TerminalFontSize, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBox Grid.Column="2"
+                             HorizontalContentAlignment="Center"
+                             IsReadOnly="True"
+                             Text="{Binding TerminalFontSize, StringFormat={}{0:0}}" />
+                </Grid>
+
+                <Grid Grid.Row="2" Margin="0,22,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="112" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="文字颜色" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#E6EBE8" Tag="#E6EBE8" ToolTip="#E6EBE8" Click="OnTextColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#7FE2B8" Tag="#7FE2B8" ToolTip="#7FE2B8" Click="OnTextColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#F7C574" Tag="#F7C574" ToolTip="#F7C574" Click="OnTextColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#9CDCFE" Tag="#9CDCFE" ToolTip="#9CDCFE" Click="OnTextColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#DCDCAA" Tag="#DCDCAA" ToolTip="#DCDCAA" Click="OnTextColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#FF8F8F" Tag="#FF8F8F" ToolTip="#FF8F8F" Click="OnTextColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#C586C0" Tag="#C586C0" ToolTip="#C586C0" Click="OnTextColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#7AA2F7" Tag="#7AA2F7" ToolTip="#7AA2F7" Click="OnTextColorSwatchClick" />
+                        <Button Width="28" Height="28" Padding="0" ToolTip="打开文字颜色调色盘" Click="OnOpenTextColorPaletteClick">
+                            <ui:SymbolIcon Symbol="Color20" />
+                        </Button>
+                    </StackPanel>
+                    <TextBox x:Name="TerminalTextColorTextBox"
+                             Grid.Column="2"
+                             MaxLength="9"
+                             FontFamily="Cascadia Mono, Consolas"
+                             Text="{Binding TerminalTextColor, UpdateSourceTrigger=PropertyChanged}"
+                             LostKeyboardFocus="OnTerminalTextColorLostFocus"
+                             ToolTip="HEX 颜色，例如 #E6EBE8" />
+                </Grid>
+
+                <Grid Grid.Row="3" Margin="0,18,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="112" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="背景颜色" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#141817" Tag="#141817" ToolTip="#141817" Click="OnBackgroundColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#000000" Tag="#000000" ToolTip="#000000" Click="OnBackgroundColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#1E293B" Tag="#1E293B" ToolTip="#1E293B" Click="OnBackgroundColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#173A34" Tag="#173A34" ToolTip="#173A34" Click="OnBackgroundColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#312544" Tag="#312544" ToolTip="#312544" Click="OnBackgroundColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#443125" Tag="#443125" ToolTip="#443125" Click="OnBackgroundColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#F5F5F5" Tag="#F5F5F5" ToolTip="#F5F5F5" Click="OnBackgroundColorSwatchClick" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}" Background="#FFFFFF" Tag="#FFFFFF" ToolTip="#FFFFFF" Click="OnBackgroundColorSwatchClick" />
+                        <Button Width="28" Height="28" Padding="0" ToolTip="打开背景颜色调色盘" Click="OnOpenBackgroundColorPaletteClick">
+                            <ui:SymbolIcon Symbol="Color20" />
+                        </Button>
+                    </StackPanel>
+                    <TextBox x:Name="TerminalBackgroundColorTextBox"
+                             Grid.Column="2"
+                             MaxLength="9"
+                             FontFamily="Cascadia Mono, Consolas"
+                             Text="{Binding TerminalBackgroundColor, UpdateSourceTrigger=PropertyChanged}"
+                             LostKeyboardFocus="OnTerminalBackgroundColorLostFocus"
+                             ToolTip="HEX 颜色，例如 #141817" />
+                </Grid>
+
+                <Border Grid.Row="4"
+                        Height="112"
+                        Margin="0,28,0,0"
+                        Padding="16,12"
+                        Background="{DynamicResource TerminalBackgroundBrush}"
+                        BorderBrush="{DynamicResource DividerBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        ClipToBounds="True">
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock FontFamily="Cascadia Mono, Consolas"
+                                   FontSize="{Binding TerminalFontSize}"
+                                   Foreground="{DynamicResource TerminalTextBrush}"
+                                   Text="12:34:56.789  RX  COM6  power_value=1401" />
+                        <TextBlock Margin="0,8,0,0"
+                                   FontFamily="Cascadia Mono, Consolas"
+                                   FontSize="{Binding TerminalFontSize}"
+                                   Foreground="{DynamicResource TerminalTextBrush}"
+                                   Text="12:34:56.812  TX  COM6  \x12\x33" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </ScrollViewer>
+
+        <Border Grid.Row="1"
+                Grid.Column="1"
+                Padding="30,12,34,16"
+                Background="{DynamicResource PanelBackgroundBrush}"
+                BorderBrush="{DynamicResource DividerBrush}"
+                BorderThickness="0,1,0,0">
+            <DockPanel>
+                <Button DockPanel.Dock="Left" Padding="12,6" Click="OnResetClick">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="ArrowReset20" />
+                        <TextBlock Margin="6,0,0,0" Text="恢复当前页默认值" />
+                    </StackPanel>
+                </Button>
+                <Button DockPanel.Dock="Right" Padding="18,6" IsDefault="True" Click="OnCloseClick" Content="完成" />
+            </DockPanel>
+        </Border>
+    </Grid>
+</Window>

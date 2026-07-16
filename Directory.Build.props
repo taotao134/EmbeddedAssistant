@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <Authors>DeviceDebugStudio</Authors>
+    <Company>DeviceDebugStudio</Company>
+    <Product>嵌入式调试台</Product>
+    <Copyright>Copyright (c) 2026</Copyright>
+  </PropertyGroup>
+</Project>
