@@ -86,7 +86,7 @@ public sealed class TcpServerTransport(TcpServerTransportSettings settings) : Tr
                 _clientTasks[endpoint] = Task.Run(() => ClientReadLoopAsync(endpoint, client, cancellationToken), CancellationToken.None);
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception exception)
@@ -112,7 +112,7 @@ public sealed class TcpServerTransport(TcpServerTransportSettings settings) : Tr
                 PublishReceived(buffer.AsSpan(0, count), endpoint);
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception exception)

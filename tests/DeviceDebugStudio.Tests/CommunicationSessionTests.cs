@@ -33,6 +33,21 @@ public sealed class CommunicationSessionTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sendTask);
     }
 
+    [Fact]
+    public async Task TransportFaultIsForwardedToSession()
+    {
+        BlockingSendTransport transport = new();
+        await using CommunicationSession session = new("test", transport);
+        TaskCompletionSource<Exception> fault = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.Faulted += (_, exception) => fault.TrySetResult(exception);
+
+        await session.ConnectAsync();
+        transport.RaiseFault("串口读取失败");
+
+        Exception exception = await fault.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Contains("串口读取失败", exception.Message, StringComparison.Ordinal);
+    }
+
     private sealed class BlockingSendTransport : ITransport
     {
         public string DisplayName => "blocking";
@@ -40,10 +55,13 @@ public sealed class CommunicationSessionTests
         public TransportState State { get; private set; } = TransportState.Disconnected;
         public TaskCompletionSource SendStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public event EventHandler<TransportStateChangedEventArgs>? StateChanged
+        public event EventHandler<TransportStateChangedEventArgs>? StateChanged;
+
+        public void RaiseFault(string message)
         {
-            add { }
-            remove { }
+            TransportState previous = State;
+            State = TransportState.Faulted;
+            StateChanged?.Invoke(this, new TransportStateChangedEventArgs(previous, State, message));
         }
 
         public Task ConnectAsync(CancellationToken cancellationToken = default)

@@ -48,6 +48,10 @@ public sealed class ProfileAndImportTests
         Assert.Equal(AppSettings.DefaultTerminalContentColumnWidth, defaults.TerminalContentColumnWidth);
         Assert.Equal(AppSettings.DefaultFrameTimeColumnWidth, defaults.FrameTimeColumnWidth);
         Assert.Equal(AppSettings.DefaultFrameSummaryColumnWidth, defaults.FrameSummaryColumnWidth);
+        Assert.Equal("#111111", defaults.TerminalTextColor);
+        Assert.Equal("#FFFFFF", defaults.TerminalBackgroundColor);
+        Assert.Equal("#111111", defaults.TerminalTextPalette[0]);
+        Assert.Equal("#FFFFFF", defaults.TerminalBackgroundPalette[0]);
         Assert.Equal(AppSettings.DefaultGitHubRepository, defaults.GitHubRepository);
         Assert.True(defaults.AutoUpdateEnabled);
     }

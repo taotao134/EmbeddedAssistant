@@ -35,11 +35,12 @@ public sealed class UdpTransport(UdpTransportSettings settings) : TransportBase
         CancellationTokenSource? source = Interlocked.Exchange(ref _receiveCancellation, null);
         source?.Cancel();
         _client?.Close();
-        if (_receiveTask is not null)
+        Task? receiveTask = Interlocked.Exchange(ref _receiveTask, null);
+        if (receiveTask is not null)
         {
             try
             {
-                await _receiveTask.ConfigureAwait(false);
+                await receiveTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -68,7 +69,7 @@ public sealed class UdpTransport(UdpTransportSettings settings) : TransportBase
                 PublishReceived(result.Buffer, result.RemoteEndPoint.ToString());
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception exception)

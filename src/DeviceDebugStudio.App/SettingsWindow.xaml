@@ -218,7 +218,7 @@
                              FontFamily="Cascadia Mono, Consolas"
                              Text="{Binding TerminalTextColor, UpdateSourceTrigger=PropertyChanged}"
                              LostKeyboardFocus="OnTerminalTextColorLostFocus"
-                             ToolTip="HEX 颜色，例如 #E6EBE8" />
+                             ToolTip="HEX 颜色，例如 #111111" />
                 </Grid>
 
                 <Grid Grid.Row="3" Margin="0,18,0,0">
@@ -255,7 +255,7 @@
                              FontFamily="Cascadia Mono, Consolas"
                              Text="{Binding TerminalBackgroundColor, UpdateSourceTrigger=PropertyChanged}"
                              LostKeyboardFocus="OnTerminalBackgroundColorLostFocus"
-                             ToolTip="HEX 颜色，例如 #141817" />
+                             ToolTip="HEX 颜色，例如 #FFFFFF" />
                 </Grid>
 
                 <Border Grid.Row="4"

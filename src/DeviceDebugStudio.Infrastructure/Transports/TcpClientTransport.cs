@@ -28,11 +28,12 @@ public sealed class TcpClientTransport(TcpClientTransportSettings settings) : Tr
         CancellationTokenSource? source = Interlocked.Exchange(ref _readCancellation, null);
         source?.Cancel();
         _client?.Close();
-        if (_readTask is not null)
+        Task? readTask = Interlocked.Exchange(ref _readTask, null);
+        if (readTask is not null)
         {
             try
             {
-                await _readTask.ConfigureAwait(false);
+                await readTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -83,7 +84,7 @@ public sealed class TcpClientTransport(TcpClientTransportSettings settings) : Tr
                 PublishReceived(buffer.AsSpan(0, count), $"{settings.Host}:{settings.Port}");
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception exception)

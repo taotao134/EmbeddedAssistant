@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.IO.Ports;
 using DeviceDebugStudio.Core.Transports;
 
@@ -5,6 +6,9 @@ namespace DeviceDebugStudio.Infrastructure.Transports;
 
 public sealed class SerialPortTransport(SerialTransportSettings settings) : TransportBase
 {
+    private const int ErrorOperationAborted = 995;
+    private const int OperationAbortedHResult = unchecked((int)0x800703E3);
+    private const int MaximumTransientReadAbortRetries = 5;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private SerialPort? _serialPort;
     private CancellationTokenSource? _readCancellation;
@@ -26,7 +30,9 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
             DtrEnable = settings.DtrEnable,
             RtsEnable = settings.RtsEnable,
             ReadBufferSize = 64 * 1024,
-            WriteBufferSize = 64 * 1024
+            WriteBufferSize = 64 * 1024,
+            ReadTimeout = 250,
+            WriteTimeout = 1000
         };
         _serialPort.Open();
         _readCancellation = new CancellationTokenSource();
@@ -46,11 +52,12 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
         {
         }
 
-        if (_readTask is not null)
+        Task? readTask = Interlocked.Exchange(ref _readTask, null);
+        if (readTask is not null)
         {
             try
             {
-                await _readTask.ConfigureAwait(false);
+                await readTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -69,8 +76,19 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await port.BaseStream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
-            await port.BaseStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await port.BaseStream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                ReportFault(new IOException($"串口 {settings.PortName} 写入失败：{exception.Message}", exception));
+                throw;
+            }
         }
         finally
         {
@@ -87,29 +105,65 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
     private async Task ReadLoopAsync(CancellationToken cancellationToken)
     {
         byte[] buffer = new byte[16 * 1024];
-        try
+        int transientAbortCount = 0;
+        while (!cancellationToken.IsCancellationRequested)
         {
-            while (!cancellationToken.IsCancellationRequested)
+            SerialPort? port = _serialPort;
+            if (port is null)
             {
-                SerialPort? port = _serialPort;
-                if (port is null)
-                {
-                    break;
-                }
-                int count = await port.BaseStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            try
+            {
+                int count = port.Read(buffer, 0, buffer.Length);
+                transientAbortCount = 0;
                 if (count > 0)
                 {
                     PublishReceived(buffer.AsSpan(0, count), settings.PortName);
                 }
             }
+            // 关闭串口会中止 Windows 重叠读取，驱动可能以 IOException 而不是 OCE 返回；此时属于正常断开。
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (TimeoutException)
+            {
+                transientAbortCount = 0;
+            }
+            // CH340 等驱动偶发中止单次重叠读取，但端口仍可继续使用；有限重试后再判定为真实断线。
+            catch (Exception exception) when (CanRetryReadAfterOperationAborted(port, exception, transientAbortCount))
+            {
+                transientAbortCount++;
+                await Task.Delay(TimeSpan.FromMilliseconds(50 * transientAbortCount), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                ReportFault(new IOException($"串口 {settings.PortName} 读取失败：{exception.Message}", exception));
+                return;
+            }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    }
+
+    private static bool CanRetryReadAfterOperationAborted(SerialPort port, Exception exception, int transientAbortCount) =>
+        transientAbortCount < MaximumTransientReadAbortRetries
+        && port.IsOpen
+        && IsOperationAborted(exception);
+
+    private static bool IsOperationAborted(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
         {
+            if (current is OperationCanceledException
+                || current is Win32Exception { NativeErrorCode: ErrorOperationAborted }
+                || current is IOException { HResult: OperationAbortedHResult })
+            {
+                return true;
+            }
         }
-        catch (Exception exception)
-        {
-            ReportFault(new IOException($"串口 {settings.PortName} 读取失败：{exception.Message}", exception));
-        }
+
+        return false;
     }
 
     private static Parity MapParity(SerialParity value) => value switch

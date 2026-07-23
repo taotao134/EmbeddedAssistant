@@ -25,6 +25,19 @@ public sealed record UpdateCheckResult(
     public bool IsUpdateAvailable => LatestVersion > CurrentVersion;
 }
 
+public enum UpdateProgressPhase
+{
+    Downloading,
+    Verifying,
+    PreparingToRestart
+}
+
+public sealed record UpdateProgressInfo(
+    UpdateProgressPhase Phase,
+    double Progress,
+    long BytesDownloaded,
+    long? TotalBytes);
+
 public sealed class OnlineUpdateService : IDisposable
 {
     private const long MaximumPackageBytes = 512L * 1024 * 1024;
@@ -146,7 +159,8 @@ catch {
     public async Task<string> DownloadAsync(
         UpdateManifest manifest,
         IProgress<double>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<UpdateProgressInfo>? detailedProgress = null)
     {
         ValidateManifest(manifest);
         Uri packageUri = new(manifest.PackageUrl, UriKind.Absolute);
@@ -166,10 +180,17 @@ catch {
             response.EnsureSuccessStatusCode();
 
             long? contentLength = response.Content.Headers.ContentLength;
-            if (contentLength is > MaximumPackageBytes)
+            long? totalBytes = contentLength is > 0 ? contentLength : manifest.PackageSize;
+            if (totalBytes is > MaximumPackageBytes)
             {
                 throw new InvalidDataException("更新包超过 512 MB 限制。 ");
             }
+
+            detailedProgress?.Report(new(
+                UpdateProgressPhase.Downloading,
+                0,
+                0,
+                totalBytes));
 
             await using Stream source = await response.Content
                 .ReadAsStreamAsync(cancellationToken)
@@ -195,11 +216,23 @@ catch {
 
                 await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 hash.AppendData(buffer.AsSpan(0, read));
-                if (contentLength is > 0)
+                if (totalBytes is > 0)
                 {
-                    progress?.Report(Math.Clamp((double)total / contentLength.Value, 0, 1));
+                    double fraction = Math.Clamp((double)total / totalBytes.Value, 0, 1);
+                    progress?.Report(fraction);
+                    detailedProgress?.Report(new(
+                        UpdateProgressPhase.Downloading,
+                        fraction,
+                        total,
+                        totalBytes));
                 }
             }
+
+            detailedProgress?.Report(new(
+                UpdateProgressPhase.Verifying,
+                1,
+                total,
+                totalBytes));
 
             if (manifest.PackageSize is long expectedSize && expectedSize != total)
             {
@@ -213,6 +246,11 @@ catch {
             }
 
             progress?.Report(1);
+            detailedProgress?.Report(new(
+                UpdateProgressPhase.Verifying,
+                1,
+                total,
+                totalBytes));
             return packagePath;
         }
         catch

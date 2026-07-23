@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using DeviceDebugStudio.Core.Transports;
@@ -29,6 +30,7 @@ public sealed class CommunicationSession : IAsyncDisposable
     private CancellationTokenSource? _sessionCancellation;
     private Task? _receiveTask;
     private long _displayDropCount;
+    private int _faultNotified;
 
     public CommunicationSession(string name, ITransport transport, ICaptureStore? captureStore = null, int displayCapacity = 4096)
     {
@@ -59,6 +61,7 @@ public sealed class CommunicationSession : IAsyncDisposable
         CancellationTokenSource sessionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         CancellationToken sessionToken = sessionCancellation.Token;
         _sessionCancellation = sessionCancellation;
+        Interlocked.Exchange(ref _faultNotified, 0);
         await _captureStore.StartAsync(Name, _transport.Kind, cancellationToken).ConfigureAwait(false);
         await _transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
         _receiveTask = Task.Run(() => ReceiveLoopAsync(sessionToken), CancellationToken.None);
@@ -179,5 +182,12 @@ public sealed class CommunicationSession : IAsyncDisposable
         Publish(args.Current == TransportState.Faulted
             ? TransportPacket.Error(message, _transport.DisplayName)
             : TransportPacket.Info(message, _transport.DisplayName));
+
+        if (args.Current == TransportState.Faulted
+            && _sessionCancellation is { IsCancellationRequested: false }
+            && Interlocked.Exchange(ref _faultNotified, 1) == 0)
+        {
+            Faulted?.Invoke(this, new IOException(args.ErrorMessage ?? "传输连接已故障。 "));
+        }
     }
 }

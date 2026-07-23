@@ -567,7 +567,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    public async Task<bool> DownloadAndApplyUpdateAsync(UpdateCheckResult result)
+    public async Task<bool> DownloadAndApplyUpdateAsync(
+        UpdateCheckResult result,
+        IProgress<UpdateProgressInfo>? updateProgress = null,
+        CancellationToken cancellationToken = default)
     {
         if (!result.IsUpdateAvailable || IsUpdateBusy)
         {
@@ -577,17 +580,46 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IsUpdateBusy = true;
         try
         {
-            UpdateStatusText = $"正在下载 {result.LatestVersion}…";
-            Progress<double> progress = new(value =>
+            void ApplyProgress(UpdateProgressInfo info)
             {
-                UpdateStatusText = $"正在下载 {result.LatestVersion}：{value:P0}";
-            });
+                updateProgress?.Report(info);
+                UpdateStatusText = info.Phase switch
+                {
+                    UpdateProgressPhase.Downloading => info.TotalBytes is > 0
+                        ? $"正在下载 {result.LatestVersion}：{FormatByteSize(info.BytesDownloaded)} / {FormatByteSize(info.TotalBytes.Value)} ({info.Progress:P0})"
+                        : $"正在下载 {result.LatestVersion}：{info.Progress:P0}",
+                    UpdateProgressPhase.Verifying => $"正在校验更新包 {result.LatestVersion}…",
+                    UpdateProgressPhase.PreparingToRestart => "更新已准备，程序即将重启",
+                    _ => $"正在更新 {result.LatestVersion}…"
+                };
+            }
+
+            ApplyProgress(new(
+                UpdateProgressPhase.Downloading,
+                0,
+                0,
+                result.Manifest.PackageSize));
+            Progress<UpdateProgressInfo> detailedProgress = new(ApplyProgress);
             string packagePath = await _updateService
-                .DownloadAsync(result.Manifest, progress)
+                .DownloadAsync(
+                    result.Manifest,
+                    cancellationToken: cancellationToken,
+                    detailedProgress: detailedProgress)
                 .ConfigureAwait(true);
+            cancellationToken.ThrowIfCancellationRequested();
+            ApplyProgress(new(
+                UpdateProgressPhase.PreparingToRestart,
+                1,
+                result.Manifest.PackageSize ?? 0,
+                result.Manifest.PackageSize));
             _updateService.StartInstaller(packagePath);
             UpdateStatusText = "更新已准备，程序即将重启";
             return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            UpdateStatusText = "更新已取消";
+            return false;
         }
         catch (Exception exception)
         {
@@ -598,6 +630,21 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             IsUpdateBusy = false;
         }
+    }
+
+    private static string FormatByteSize(long bytes)
+    {
+        if (bytes >= 1024 * 1024)
+        {
+            return $"{bytes / 1024d / 1024d:0.0} MB";
+        }
+
+        if (bytes >= 1024)
+        {
+            return $"{bytes / 1024d:0.0} KB";
+        }
+
+        return $"{bytes:N0} B";
     }
 
     private async Task CheckForUpdatesInBackgroundAsync()
@@ -887,7 +934,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     private bool CanUseConnectedSession => IsConnected
-        && _session is not null
+        && _session is { Transport.State: TransportState.Connected }
         && _connectedWorkspaceMode == SelectedWorkspaceMode.Mode;
 
     public bool CanSend => CanUseConnectedSession && !string.IsNullOrEmpty(SendText);
@@ -2203,6 +2250,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (!Application.Current.Dispatcher.CheckAccess())
         {
             await Application.Current.Dispatcher.InvokeAsync(() => OnSessionFaulted(sender, exception));
+            return;
+        }
+
+        if (sender is not CommunicationSession faultedSession
+            || !ReferenceEquals(faultedSession, _session))
+        {
             return;
         }
 

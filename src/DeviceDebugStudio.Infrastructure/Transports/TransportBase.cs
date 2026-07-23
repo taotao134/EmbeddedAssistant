@@ -12,7 +12,7 @@ public abstract class TransportBase : ITransport
         SingleReader = false,
         SingleWriter = false
     });
-    private TransportState _state = TransportState.Disconnected;
+    private volatile TransportState _state = TransportState.Disconnected;
     private int _disposed;
 
     public abstract string DisplayName { get; }
@@ -110,8 +110,10 @@ public abstract class TransportBase : ITransport
 
     protected void ReportFault(Exception exception)
     {
-        SetState(TransportState.Faulted, exception.Message);
-        Publish(TransportPacket.Error(exception.Message, DisplayName));
+        if (_state != TransportState.Faulted)
+        {
+            SetState(TransportState.Faulted, exception.Message);
+        }
     }
 
     protected void EnsureConnected()

@@ -1454,13 +1454,45 @@ public partial class MainWindow : Window
                 return;
             }
 
-            bool started = await _viewModel.DownloadAndApplyUpdateAsync(result);
+            using CancellationTokenSource updateCancellation = new();
+            UpdateProgressWindow progressWindow = new(result)
+            {
+                Owner = this
+            };
+            progressWindow.CancellationRequested += (_, _) => updateCancellation.Cancel();
+
+            bool wasEnabled = IsEnabled;
+            bool started = false;
+            progressWindow.Show();
+            IsEnabled = false;
+            try
+            {
+                Progress<UpdateProgressInfo> progress = new(progressWindow.ReportProgress);
+                started = await _viewModel
+                    .DownloadAndApplyUpdateAsync(result, progress, updateCancellation.Token);
+                if (started)
+                {
+                    progressWindow.MarkCompleted();
+                    await Task.Delay(350);
+                }
+            }
+            finally
+            {
+                progressWindow.AllowClose();
+                if (progressWindow.IsVisible)
+                {
+                    progressWindow.Close();
+                }
+
+                IsEnabled = wasEnabled;
+            }
+
             if (started)
             {
                 MessageBox.Show(this, "更新包已校验，程序将关闭并自动重启。", "更新", MessageBoxButton.OK, MessageBoxImage.Information);
                 Application.Current.Shutdown();
             }
-            else
+            else if (!progressWindow.IsCancellationRequested)
             {
                 MessageBox.Show(this, _viewModel.UpdateStatusText, "更新失败", MessageBoxButton.OK, MessageBoxImage.Error);
             }

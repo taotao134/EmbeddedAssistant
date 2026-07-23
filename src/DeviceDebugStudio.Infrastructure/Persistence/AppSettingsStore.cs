@@ -27,14 +27,14 @@ public sealed record AppSettings
     public double FrameLengthColumnWidth { get; init; } = DefaultFrameLengthColumnWidth;
     public double FrameHexColumnWidth { get; init; } = DefaultFrameHexColumnWidth;
     public double FrameSummaryColumnWidth { get; init; } = DefaultFrameSummaryColumnWidth;
-    public string TerminalTextColor { get; init; } = "#E6EBE8";
-    public string TerminalBackgroundColor { get; init; } = "#141817";
+    public string TerminalTextColor { get; init; } = "#111111";
+    public string TerminalBackgroundColor { get; init; } = "#FFFFFF";
     public string GitHubRepository { get; init; } = DefaultGitHubRepository;
     public bool AutoUpdateEnabled { get; init; } = true;
     public List<string> TerminalTextPalette { get; init; } =
-        ["#E6EBE8", "#7FE2B8", "#F7C574", "#9CDCFE", "#DCDCAA", "#FF8F8F", "#C586C0", "#7AA2F7"];
+        ["#111111", "#7FE2B8", "#F7C574", "#9CDCFE", "#DCDCAA", "#FF8F8F", "#C586C0", "#7AA2F7"];
     public List<string> TerminalBackgroundPalette { get; init; } =
-        ["#141817", "#000000", "#1E293B", "#173A34", "#312544", "#443125", "#F5F5F5", "#FFFFFF"];
+        ["#FFFFFF", "#F5F5F5", "#000000", "#1E293B", "#173A34", "#312544", "#443125", "#141817"];
 }
 
 public sealed class AppSettingsStore

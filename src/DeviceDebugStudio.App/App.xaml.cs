@@ -19,14 +19,14 @@ namespace DeviceDebugStudio.App;
 
 public partial class App : Application
 {
-    public const string DefaultTerminalTextColor = "#E6EBE8";
-    public const string DefaultTerminalBackgroundColor = "#141817";
+    public const string DefaultTerminalTextColor = "#111111";
+    public const string DefaultTerminalBackgroundColor = "#FFFFFF";
     public const string DarkThemeTerminalTextColor = "#FFFFFF";
     public const string DarkThemeTerminalBackgroundColor = "#000000";
     public static IReadOnlyList<string> DefaultTerminalTextPalette { get; } =
-        ["#E6EBE8", "#7FE2B8", "#F7C574", "#9CDCFE", "#DCDCAA", "#FF8F8F", "#C586C0", "#7AA2F7"];
+        ["#111111", "#7FE2B8", "#F7C574", "#9CDCFE", "#DCDCAA", "#FF8F8F", "#C586C0", "#7AA2F7"];
     public static IReadOnlyList<string> DefaultTerminalBackgroundPalette { get; } =
-        ["#141817", "#000000", "#1E293B", "#173A34", "#312544", "#443125", "#F5F5F5", "#FFFFFF"];
+        ["#FFFFFF", "#F5F5F5", "#000000", "#1E293B", "#173A34", "#312544", "#443125", "#141817"];
 
     private static int _errorDialogVisible;
     private IHost? _host;
