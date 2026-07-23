@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DeviceDebugStudio.Infrastructure.Persistence;
 
 namespace DeviceDebugStudio.Infrastructure.Updates;
 
@@ -40,7 +41,10 @@ public sealed record UpdateProgressInfo(
 
 public sealed class OnlineUpdateService : IDisposable
 {
+    public const string ApplicationMutexName = @"Local\DeviceDebugStudio.Instance";
+
     private const long MaximumPackageBytes = 512L * 1024 * 1024;
+    private const string InstallerFailureLogFileName = "last-install-error.log";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -52,30 +56,158 @@ param(
     [string]$InstallDirectory,
     [string]$ExecutablePath,
     [string]$ScriptPath,
-    [string]$ErrorLogPath
+    [string]$ErrorLogPath,
+    [string]$InstanceMutexName,
+    [string]$FailureLogPath
 )
 
 $ErrorActionPreference = 'Stop'
-try {
-    while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
+$installerMutex = $null
+$ownsInstallerMutex = $false
+
+function Wait-ForProcessExit {
+    param(
+        [int]$ProcessId,
+        [int]$TimeoutSeconds
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+        if ([DateTime]::UtcNow -ge $deadline) {
+            throw "Timed out waiting for the application process to exit."
+        }
+
         Start-Sleep -Milliseconds 200
     }
+}
+
+function Wait-ForTargetProcesses {
+    param(
+        [string]$TargetExecutable,
+        [int]$TimeoutSeconds
+    )
+
+    $expectedPath = [IO.Path]::GetFullPath($TargetExecutable)
+    $processName = [IO.Path]::GetFileNameWithoutExtension($TargetExecutable)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ($true) {
+        $matchingProcesses = @(Get-Process -Name $processName -ErrorAction SilentlyContinue | Where-Object {
+            try {
+                $_.Path -and [string]::Equals(
+                    [IO.Path]::GetFullPath($_.Path),
+                    $expectedPath,
+                    [StringComparison]::OrdinalIgnoreCase)
+            }
+            catch {
+                $false
+            }
+        })
+        if ($matchingProcesses.Count -eq 0) {
+            return
+        }
+
+        if ([DateTime]::UtcNow -ge $deadline) {
+            throw "Timed out waiting for other application instances to exit."
+        }
+
+        Start-Sleep -Milliseconds 200
+    }
+}
+
+function Copy-StagedPackage {
+    param(
+        [string]$StagingDirectory,
+        [string]$TargetDirectory,
+        [int]$TimeoutSeconds
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ($true) {
+        try {
+            foreach ($item in Get-ChildItem -LiteralPath $StagingDirectory -Force) {
+                Copy-Item -LiteralPath $item.FullName -Destination $TargetDirectory -Recurse -Force
+            }
+
+            return
+        }
+        catch [IO.IOException] {
+            if ([DateTime]::UtcNow -ge $deadline) {
+                throw
+            }
+
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
+try {
+    Wait-ForProcessExit -ProcessId $ParentPid -TimeoutSeconds 90
+
+    $installerMutex = [Threading.Mutex]::new($false, $InstanceMutexName)
+    $mutexDeadline = [DateTime]::UtcNow.AddSeconds(90)
+    while (-not $ownsInstallerMutex) {
+        try {
+            $ownsInstallerMutex = $installerMutex.WaitOne(200)
+        }
+        catch [Threading.AbandonedMutexException] {
+            $ownsInstallerMutex = $true
+        }
+
+        if (-not $ownsInstallerMutex -and [DateTime]::UtcNow -ge $mutexDeadline) {
+            throw "Timed out waiting for the application update lock."
+        }
+    }
+
+    Wait-ForTargetProcesses -TargetExecutable $ExecutablePath -TimeoutSeconds 90
 
     $stagingDirectory = Join-Path ([IO.Path]::GetTempPath()) ("DeviceDebugStudio-update-" + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
     Expand-Archive -LiteralPath $PackagePath -DestinationPath $stagingDirectory -Force
 
-    foreach ($item in Get-ChildItem -LiteralPath $stagingDirectory -Force) {
-        Copy-Item -LiteralPath $item.FullName -Destination $InstallDirectory -Recurse -Force
-    }
+    Copy-StagedPackage -StagingDirectory $stagingDirectory -TargetDirectory $InstallDirectory -TimeoutSeconds 90
 
     Remove-Item -LiteralPath $PackagePath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $FailureLogPath -Force -ErrorAction SilentlyContinue
+
+    if ($ownsInstallerMutex) {
+        $installerMutex.ReleaseMutex()
+        $ownsInstallerMutex = $false
+    }
+    $installerMutex.Dispose()
+    $installerMutex = $null
+
     Start-Process -FilePath $ExecutablePath -WorkingDirectory $InstallDirectory
 }
 catch {
-    [IO.File]::WriteAllText($ErrorLogPath, $_.Exception.ToString(), [Text.Encoding]::UTF8)
+    $errorText = $_.Exception.ToString()
+    try {
+        [IO.File]::WriteAllText($ErrorLogPath, $errorText, [Text.Encoding]::UTF8)
+    }
+    catch {
+    }
+    try {
+        $failureDirectory = Split-Path -Parent $FailureLogPath
+        if (-not [string]::IsNullOrWhiteSpace($failureDirectory)) {
+            New-Item -ItemType Directory -Path $failureDirectory -Force | Out-Null
+        }
+        [IO.File]::WriteAllText($FailureLogPath, $errorText, [Text.Encoding]::UTF8)
+    }
+    catch {
+    }
+}
+finally {
+    if ($ownsInstallerMutex -and $null -ne $installerMutex) {
+        try {
+            $installerMutex.ReleaseMutex()
+        }
+        catch {
+        }
+    }
+    if ($null -ne $installerMutex) {
+        $installerMutex.Dispose()
+    }
 }
 """;
 
@@ -290,6 +422,9 @@ catch {
         Directory.CreateDirectory(updateDirectory);
         string scriptPath = Path.Combine(updateDirectory, "install.ps1");
         string errorLogPath = Path.Combine(updateDirectory, "install-error.log");
+        string failureLogPath = GetInstallerFailureLogPath();
+        Directory.CreateDirectory(Path.GetDirectoryName(failureLogPath)!);
+        TryDeleteFile(failureLogPath);
         File.WriteAllText(scriptPath, InstallerScript, new UTF8Encoding(false));
 
         ProcessStartInfo startInfo = new()
@@ -318,11 +453,46 @@ catch {
         startInfo.ArgumentList.Add(scriptPath);
         startInfo.ArgumentList.Add("-ErrorLogPath");
         startInfo.ArgumentList.Add(errorLogPath);
+        startInfo.ArgumentList.Add("-InstanceMutexName");
+        startInfo.ArgumentList.Add(ApplicationMutexName);
+        startInfo.ArgumentList.Add("-FailureLogPath");
+        startInfo.ArgumentList.Add(failureLogPath);
 
         if (Process.Start(startInfo) is null)
         {
             TryDeleteDirectory(updateDirectory);
             throw new InvalidOperationException("无法启动更新安装代理。 ");
+        }
+    }
+
+    public static bool TryConsumeInstallerFailure(out string message)
+    {
+        message = string.Empty;
+        string failureLogPath = GetInstallerFailureLogPath();
+        try
+        {
+            if (!File.Exists(failureLogPath))
+            {
+                return false;
+            }
+
+            message = File.ReadAllText(failureLogPath).Trim();
+            TryDeleteFile(failureLogPath);
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return false;
+            }
+
+            if (message.Length > 2000)
+            {
+                message = message[..2000] + "...";
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -512,6 +682,25 @@ catch {
             if (Directory.Exists(path))
             {
                 Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static string GetInstallerFailureLogPath() => Path.Combine(
+        AppPaths.LocalDataDirectory,
+        "Updates",
+        InstallerFailureLogFileName);
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
             }
         }
         catch

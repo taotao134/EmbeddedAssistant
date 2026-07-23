@@ -31,11 +31,24 @@ public partial class App : Application
     private static readonly TimeSpan HostShutdownTimeout = TimeSpan.FromSeconds(3);
     private static int _errorDialogVisible;
     private IHost? _host;
+    private Mutex? _instanceMutex;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         Stopwatch startupStopwatch = Stopwatch.StartNew();
         base.OnStartup(e);
+        if (!TryAcquireApplicationMutex(out Mutex? instanceMutex))
+        {
+            MessageBox.Show(
+                "嵌入式调试台已在运行或正在安装更新。",
+                "嵌入式调试台",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            Shutdown();
+            return;
+        }
+
+        _instanceMutex = instanceMutex;
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
@@ -87,6 +100,16 @@ public partial class App : Application
             Log.Information("主窗口已显示，启动耗时 {ElapsedMilliseconds} ms", startupStopwatch.ElapsedMilliseconds);
             await viewModel.InitializeAsync(startupSettings);
             Log.Information("配置初始化完成，总耗时 {ElapsedMilliseconds} ms", startupStopwatch.ElapsedMilliseconds);
+            if (OnlineUpdateService.TryConsumeInstallerFailure(out string installerFailure))
+            {
+                Log.Error("上次在线更新未完成：{InstallerFailure}", installerFailure);
+                MessageBox.Show(
+                    mainWindow,
+                    $"上次在线更新未完成。\n\n{installerFailure}",
+                    "更新失败",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
         }
         catch (Exception exception)
         {
@@ -141,9 +164,59 @@ public partial class App : Application
         }
         finally
         {
+            ReleaseApplicationMutex();
             Log.Information("应用退出流程完成");
             Log.CloseAndFlush();
             base.OnExit(e);
+        }
+    }
+
+    private static bool TryAcquireApplicationMutex(out Mutex? mutex)
+    {
+        Mutex candidate = new(initiallyOwned: false, OnlineUpdateService.ApplicationMutexName);
+        try
+        {
+            try
+            {
+                if (!candidate.WaitOne(0))
+                {
+                    candidate.Dispose();
+                    mutex = null;
+                    return false;
+                }
+            }
+            catch (AbandonedMutexException)
+            {
+            }
+
+            mutex = candidate;
+            return true;
+        }
+        catch
+        {
+            candidate.Dispose();
+            throw;
+        }
+    }
+
+    private void ReleaseApplicationMutex()
+    {
+        Mutex? instanceMutex = Interlocked.Exchange(ref _instanceMutex, null);
+        if (instanceMutex is null)
+        {
+            return;
+        }
+
+        try
+        {
+            instanceMutex.ReleaseMutex();
+        }
+        catch (ApplicationException)
+        {
+        }
+        finally
+        {
+            instanceMutex.Dispose();
         }
     }
 

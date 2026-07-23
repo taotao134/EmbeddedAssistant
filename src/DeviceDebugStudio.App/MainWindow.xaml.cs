@@ -1,13 +1,11 @@
 using System.ComponentModel;
 using System.Collections.Specialized;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
-using System.Windows.Interop;
 using System.Windows.Threading;
 using System.Windows.Media;
 using DeviceDebugStudio.App.ViewModels;
@@ -38,21 +36,15 @@ public partial class MainWindow : Window
     private const double FrameLengthColumnMinWidth = 42;
     private const double FrameHexColumnMinWidth = 100;
     private const double FrameSummaryColumnMinWidth = 110;
-    private const int WmNonClientLeftButtonDoubleClick = 0x00A3;
-    private const int WmNonClientHitTest = 0x0084;
-    private const int WmSystemCommand = 0x0112;
-    private const int HitTestSystemMenu = 3;
-    private const int HitTestCloseButton = 20;
-    private const int SystemCommandClose = 0xF060;
     private static readonly TimeSpan ViewModelShutdownTimeout = TimeSpan.FromSeconds(3);
 
     private readonly MainWindowViewModel _viewModel;
     private readonly DataLogger _chartLogger;
     private readonly DispatcherTimer _chartRefreshTimer;
     private readonly List<double> _chartValues = [];
-    private HwndSource? _windowSource;
     private bool _chartDirty;
     private bool _closing;
+    private bool _closeApproved;
     private bool _deviceDesiredOpen;
     private bool _commandDesiredOpen = true;
     private SidebarFocus _sidebarFocus;
@@ -168,66 +160,16 @@ public partial class MainWindow : Window
         }));
     }
 
-    protected override void OnSourceInitialized(EventArgs e)
-    {
-        base.OnSourceInitialized(e);
-        _windowSource = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
-        _windowSource?.AddHook(OnWindowMessage);
-    }
-
     protected override void OnClosed(EventArgs e)
     {
         _viewModel.QuickCommandAdded -= OnQuickCommandAdded;
         _viewModel.UpdateAvailable -= OnUpdateAvailable;
         _viewModel.FrameRecords.CollectionChanged -= OnFrameRecordsCollectionChanged;
-        _windowSource?.RemoveHook(OnWindowMessage);
-        _windowSource = null;
         base.OnClosed(e);
         if (!Application.Current.Dispatcher.HasShutdownStarted)
         {
             Application.Current.Shutdown();
         }
-    }
-
-    private static nint OnWindowMessage(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
-    {
-        if (message == WmNonClientLeftButtonDoubleClick && wParam.ToInt32() == HitTestSystemMenu)
-        {
-            handled = true;
-        }
-        else if (message == WmSystemCommand
-            && (wParam.ToInt64() & 0xFFF0) == SystemCommandClose
-            && GetPointerHitTest(hwnd) != HitTestCloseButton)
-        {
-            handled = true;
-        }
-
-        return 0;
-    }
-
-    private static int GetPointerHitTest(nint hwnd)
-    {
-        if (!GetCursorPos(out NativePoint point))
-        {
-            return 0;
-        }
-
-        nint coordinates = (point.X & 0xFFFF) | (point.Y << 16);
-        return SendMessage(hwnd, WmNonClientHitTest, 0, coordinates).ToInt32();
-    }
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetCursorPos(out NativePoint point);
-
-    [DllImport("user32.dll")]
-    private static extern nint SendMessage(nint hwnd, int message, nint wParam, nint lParam);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativePoint
-    {
-        public int X;
-        public int Y;
     }
 
     private void OnChartValueAdded(double value)
@@ -1495,8 +1437,7 @@ public partial class MainWindow : Window
 
             if (started)
             {
-                MessageBox.Show(this, "更新包已校验，程序将关闭并自动重启。", "更新", MessageBoxButton.OK, MessageBoxImage.Information);
-                Application.Current.Shutdown();
+                Close();
             }
             else if (!progressWindow.IsCancellationRequested)
             {
@@ -1933,12 +1874,17 @@ public partial class MainWindow : Window
 
     private async void OnWindowClosing(object? sender, CancelEventArgs e)
     {
-        if (_closing)
+        if (_closeApproved)
         {
             return;
         }
 
         e.Cancel = true;
+        if (_closing)
+        {
+            return;
+        }
+
         _closing = true;
         _chartRefreshTimer.Stop();
         _viewModel.ChartValueAdded -= OnChartValueAdded;
@@ -1959,7 +1905,8 @@ public partial class MainWindow : Window
         }
         finally
         {
-            Close();
+            _closeApproved = true;
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(Close));
         }
     }
 }
