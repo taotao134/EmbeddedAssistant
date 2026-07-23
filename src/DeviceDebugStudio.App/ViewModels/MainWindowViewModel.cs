@@ -85,6 +85,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private Task _lastAppSettingsSaveTask = Task.CompletedTask;
     private readonly SemaphoreSlim _appSettingsSaveLock = new(1, 1);
     private WorkspaceMode? _connectedWorkspaceMode;
+    private int _disposed;
 
     public MainWindowViewModel(
         IConfigurableDeviceProfileStore profileStore,
@@ -1501,6 +1502,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
         _uiTimer.Stop();
         _profileSaveTimer.Stop();
         _appSettingsSaveTimer.Stop();

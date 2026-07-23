@@ -17,6 +17,7 @@ using DeviceDebugStudio.Infrastructure.Transports;
 using DeviceDebugStudio.Infrastructure.Updates;
 using Microsoft.Win32;
 using ScottPlot.Plottables;
+using Serilog;
 using Wpf.Ui.Appearance;
 
 namespace DeviceDebugStudio.App;
@@ -43,6 +44,7 @@ public partial class MainWindow : Window
     private const int HitTestSystemMenu = 3;
     private const int HitTestCloseButton = 20;
     private const int SystemCommandClose = 0xF060;
+    private static readonly TimeSpan ViewModelShutdownTimeout = TimeSpan.FromSeconds(3);
 
     private readonly MainWindowViewModel _viewModel;
     private readonly DataLogger _chartLogger;
@@ -181,6 +183,10 @@ public partial class MainWindow : Window
         _windowSource?.RemoveHook(OnWindowMessage);
         _windowSource = null;
         base.OnClosed(e);
+        if (!Application.Current.Dispatcher.HasShutdownStarted)
+        {
+            Application.Current.Shutdown();
+        }
     }
 
     private static nint OnWindowMessage(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
@@ -1939,7 +1945,21 @@ public partial class MainWindow : Window
         _viewModel.RecordsAppended -= OnRecordsAppended;
         _viewModel.TerminalRecords.CollectionChanged -= OnTerminalRecordsCollectionChanged;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
-        await _viewModel.DisposeAsync();
-        Close();
+        try
+        {
+            await _viewModel.DisposeAsync().AsTask().WaitAsync(ViewModelShutdownTimeout);
+        }
+        catch (TimeoutException)
+        {
+            Log.Warning("主窗口关闭清理超时，继续结束应用");
+        }
+        catch (Exception exception)
+        {
+            Log.Error(exception, "主窗口关闭清理失败，继续结束应用");
+        }
+        finally
+        {
+            Close();
+        }
     }
 }

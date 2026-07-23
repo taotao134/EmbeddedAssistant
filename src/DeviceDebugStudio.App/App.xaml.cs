@@ -28,6 +28,7 @@ public partial class App : Application
     public static IReadOnlyList<string> DefaultTerminalBackgroundPalette { get; } =
         ["#FFFFFF", "#F5F5F5", "#000000", "#1E293B", "#173A34", "#312544", "#443125", "#141817"];
 
+    private static readonly TimeSpan HostShutdownTimeout = TimeSpan.FromSeconds(3);
     private static int _errorDialogVisible;
     private IHost? _host;
 
@@ -81,6 +82,7 @@ public partial class App : Application
 
             MainWindowViewModel viewModel = _host.Services.GetRequiredService<MainWindowViewModel>();
             MainWindow mainWindow = _host.Services.GetRequiredService<MainWindow>();
+            MainWindow = mainWindow;
             mainWindow.Show();
             Log.Information("主窗口已显示，启动耗时 {ElapsedMilliseconds} ms", startupStopwatch.ElapsedMilliseconds);
             await viewModel.InitializeAsync(startupSettings);
@@ -94,15 +96,55 @@ public partial class App : Application
         }
     }
 
-    protected override async void OnExit(ExitEventArgs e)
+    protected override void OnExit(ExitEventArgs e)
     {
-        if (_host is not null)
+        try
         {
-            await _host.StopAsync(TimeSpan.FromSeconds(3));
-            _host.Dispose();
+            IHost? host = _host;
+            _host = null;
+            if (host is not null)
+            {
+                using CancellationTokenSource shutdown = new(HostShutdownTimeout);
+                try
+                {
+                    Log.Information("正在停止应用宿主");
+                    Task stopTask = Task.Run(() => host.StopAsync(shutdown.Token));
+                    if (!stopTask.Wait(HostShutdownTimeout))
+                    {
+                        Log.Warning("应用宿主停止超时，继续结束进程");
+                    }
+                }
+                catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+                {
+                    Log.Warning("应用宿主停止超时，继续结束进程");
+                }
+                finally
+                {
+                    try
+                    {
+                        Task disposeTask = Task.Run(host.Dispose);
+                        if (!disposeTask.Wait(HostShutdownTimeout))
+                        {
+                            Log.Warning("应用宿主销毁超时，继续结束进程");
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        Log.Error(exception, "应用关闭时销毁宿主失败");
+                    }
+                }
+            }
         }
-        Log.CloseAndFlush();
-        base.OnExit(e);
+        catch (Exception exception)
+        {
+            Log.Error(exception, "应用关闭时停止宿主失败");
+        }
+        finally
+        {
+            Log.Information("应用退出流程完成");
+            Log.CloseAndFlush();
+            base.OnExit(e);
+        }
     }
 
     public static void ApplyTheme(ApplicationTheme theme)
