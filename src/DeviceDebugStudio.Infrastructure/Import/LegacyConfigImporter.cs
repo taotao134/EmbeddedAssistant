@@ -101,6 +101,9 @@ public sealed class LegacyConfigImporter
         Dictionary<int, string> values = ParseNumericKeys(text);
         string profileName = Directory.GetParent(path)?.Name ?? Path.GetFileNameWithoutExtension(path);
         ChecksumKind checksum = ParseChecksum(GetSetting(values, 1060));
+        string lineEnding = string.Equals(GetSetting(values, 1057), "Y", StringComparison.OrdinalIgnoreCase)
+            ? "CRLF"
+            : "None";
         List<QuickCommand> commands = [];
         for (int index = 1; index <= 100; index++)
         {
@@ -138,6 +141,7 @@ public sealed class LegacyConfigImporter
                 Name = label,
                 Payload = payload,
                 IsHex = char.ToUpperInvariant(mode) == 'H',
+                LineEnding = lineEnding,
                 Checksum = checksum,
                 RepeatEnabled = repeat,
                 RepeatIntervalMs = interval
@@ -157,7 +161,7 @@ public sealed class LegacyConfigImporter
                 SendAsHex = string.Equals(GetSetting(values, 1055), "H", StringComparison.OrdinalIgnoreCase),
                 ReceiveAsHex = string.Equals(GetSetting(values, 1059), "Y", StringComparison.OrdinalIgnoreCase),
                 ShowTimestamp = true,
-                LineEnding = string.Equals(GetSetting(values, 1057), "Y", StringComparison.OrdinalIgnoreCase) ? "CRLF" : "None"
+                LineEnding = lineEnding
             },
             FrameTemplate = string.Equals(GetSetting(values, 1064), "Y", StringComparison.OrdinalIgnoreCase)
                 ? new FrameTemplate

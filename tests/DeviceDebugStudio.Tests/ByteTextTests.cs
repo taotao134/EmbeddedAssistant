@@ -45,6 +45,30 @@ public sealed class ByteTextTests
     }
 
     [Fact]
+    public void ExpandVariablesSupportsMultipleNamedValues()
+    {
+        string result = ByteText.ExpandVariables(
+            "SET ${id} ${speed}",
+            new Dictionary<string, string>
+            {
+                ["id"] = "01",
+                ["speed"] = "1500"
+            });
+
+        Assert.Equal("SET 01 1500", result);
+    }
+
+    [Fact]
+    public void ExpandVariablesKeepsFixedCommandUnchangedWhenDefaultSetIsEmpty()
+    {
+        const string command = "AT+BAUD=115200";
+
+        string result = ByteText.ExpandVariables(command, new Dictionary<string, string>());
+
+        Assert.Equal(command, result);
+    }
+
+    [Fact]
     public void ToEscapedHex_PrefixesEveryByteWithoutAmbiguity()
     {
         Assert.Equal(@"\x12\x33", ByteText.ToEscapedHex([0x12, 0x33]));

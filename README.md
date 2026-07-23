@@ -4,10 +4,10 @@
 
 ## 构建
 
-项目使用仓库内 `.tools\dotnet` 中的 .NET 10 SDK：
+项目使用系统安装的 .NET 10 SDK（`C:\Program Files\dotnet`）：
 
 ```powershell
-.\.tools\dotnet\dotnet.exe build .\DeviceDebugStudio.sln -c Debug
+dotnet build .\DeviceDebugStudio.sln -c Debug
 ```
 
 ## 发布

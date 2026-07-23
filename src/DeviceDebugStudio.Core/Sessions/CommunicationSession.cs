@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using DeviceDebugStudio.Core.Transports;
@@ -55,10 +56,12 @@ public sealed class CommunicationSession : IAsyncDisposable
             return;
         }
 
-        _sessionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        CancellationTokenSource sessionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        CancellationToken sessionToken = sessionCancellation.Token;
+        _sessionCancellation = sessionCancellation;
         await _captureStore.StartAsync(Name, _transport.Kind, cancellationToken).ConfigureAwait(false);
         await _transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
-        _receiveTask = Task.Run(() => ReceiveLoopAsync(_sessionCancellation.Token), CancellationToken.None);
+        _receiveTask = Task.Run(() => ReceiveLoopAsync(sessionToken), CancellationToken.None);
     }
 
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
@@ -109,7 +112,8 @@ public sealed class CommunicationSession : IAsyncDisposable
                 PacketDirection.Send,
                 data.ToArray(),
                 target ?? _transport.DisplayName,
-                SentAsHex: sentAsHex);
+                SentAsHex: sentAsHex,
+                ArrivalTimestamp: Stopwatch.GetTimestamp());
             await RecordAndPublishAsync(packet, linkedSource.Token).ConfigureAwait(false);
         }
         finally

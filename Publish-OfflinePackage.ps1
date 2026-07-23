@@ -1,13 +1,13 @@
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$dotnet = Join-Path $root '.tools\dotnet\dotnet.exe'
+$dotnet = (Get-Command dotnet -ErrorAction Stop).Source
 $project = Join-Path $root 'src\DeviceDebugStudio.App\DeviceDebugStudio.App.csproj'
 $releaseRoot = Join-Path $root 'ReleasePackages'
 $publishDir = Join-Path $releaseRoot '嵌入式调试台-win-x64'
 $zipPath = Join-Path $releaseRoot '嵌入式调试台-win-x64.zip'
 
 if (-not (Test-Path -LiteralPath $dotnet)) {
-    throw '未找到项目内 .NET 10 SDK。'
+    throw '未找到系统 .NET SDK。'
 }
 
 Get-Process DeviceDebugStudio -ErrorAction SilentlyContinue | Stop-Process -Force

@@ -3,6 +3,7 @@ using DeviceDebugStudio.Core.Transports;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
+using Windows.Devices.Enumeration;
 using Windows.Storage.Streams;
 
 namespace DeviceDebugStudio.Infrastructure.Transports;
@@ -10,27 +11,49 @@ namespace DeviceDebugStudio.Infrastructure.Transports;
 public sealed record BleDeviceInfo(ulong Address, string Name, short Rssi)
 {
     public string AddressText => Address.ToString("X12");
-    public string DisplayName => string.IsNullOrWhiteSpace(Name) ? $"BLE {AddressText}" : $"{Name} ({AddressText})";
+    public string DisplayName => string.IsNullOrWhiteSpace(Name) ? "未知设备" : Name;
+
+    public BleDeviceInfo MergeAdvertisement(string? name, short rssi) => this with
+    {
+        Name = string.IsNullOrWhiteSpace(name) ? Name : name.Trim(),
+        Rssi = rssi
+    };
+
+    public BleDeviceInfo WithSystemDisplayName(string? systemDisplayName) => string.IsNullOrWhiteSpace(systemDisplayName)
+        ? this
+        : this with { Name = systemDisplayName.Trim() };
 }
 
 public sealed class BleDiscoveryService
 {
+    public IReadOnlyList<string> LastClassicDeviceNames { get; private set; } = [];
+
     public async Task<IReadOnlyList<BleDeviceInfo>> ScanAsync(TimeSpan duration, string? nameFilter = null, CancellationToken cancellationToken = default)
     {
         ConcurrentDictionary<ulong, BleDeviceInfo> devices = new();
+        ConcurrentDictionary<string, string> classicDevices = new(StringComparer.OrdinalIgnoreCase);
+        TaskCompletionSource classicEnumerationCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         BluetoothLEAdvertisementWatcher watcher = new() { ScanningMode = BluetoothLEScanningMode.Active };
+        DeviceWatcher classicWatcher = DeviceInformation.CreateWatcher(BluetoothDevice.GetDeviceSelectorFromPairingState(false));
         watcher.Received += (_, args) =>
         {
             string name = args.Advertisement.LocalName ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(nameFilter) && !name.Contains(nameFilter, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            devices[args.BluetoothAddress] = new BleDeviceInfo(args.BluetoothAddress, name, args.RawSignalStrengthInDBm);
+            devices.AddOrUpdate(
+                args.BluetoothAddress,
+                new BleDeviceInfo(args.BluetoothAddress, name.Trim(), args.RawSignalStrengthInDBm),
+                (_, existing) => existing.MergeAdvertisement(name, args.RawSignalStrengthInDBm));
         };
+        classicWatcher.Added += (_, device) =>
+        {
+            if (!string.IsNullOrWhiteSpace(device.Name))
+            {
+                classicDevices[device.Id] = device.Name.Trim();
+            }
+        };
+        classicWatcher.EnumerationCompleted += (_, _) => classicEnumerationCompleted.TrySetResult();
 
         watcher.Start();
+        classicWatcher.Start();
         try
         {
             await Task.Delay(duration, cancellationToken).ConfigureAwait(false);
@@ -40,7 +63,55 @@ public sealed class BleDiscoveryService
             watcher.Stop();
         }
 
-        return devices.Values.OrderByDescending(device => device.Rssi).ToArray();
+        try
+        {
+            await classicEnumerationCompleted.Task
+                .WaitAsync(TimeSpan.FromSeconds(30), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+        }
+        finally
+        {
+            if (classicWatcher.Status is DeviceWatcherStatus.Started or DeviceWatcherStatus.EnumerationCompleted)
+            {
+                classicWatcher.Stop();
+            }
+        }
+
+        LastClassicDeviceNames = classicDevices.Values
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
+
+        BleDeviceInfo[] resolvedDevices = await Task.WhenAll(
+            devices.Values.Select(device => ResolveSystemDisplayNameAsync(device, cancellationToken))).ConfigureAwait(false);
+
+        return resolvedDevices
+            .Where(device => string.IsNullOrWhiteSpace(nameFilter)
+                || device.Name.Contains(nameFilter, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(device => device.Rssi)
+            .ToArray();
+    }
+
+    private static async Task<BleDeviceInfo> ResolveSystemDisplayNameAsync(BleDeviceInfo device, CancellationToken cancellationToken)
+    {
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using BluetoothLEDevice? bluetoothDevice = await BluetoothLEDevice.FromBluetoothAddressAsync(device.Address);
+            string? systemDisplayName = bluetoothDevice?.DeviceInformation.Name;
+            return device.WithSystemDisplayName(systemDisplayName);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return device;
+        }
     }
 }
 

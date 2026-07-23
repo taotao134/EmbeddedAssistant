@@ -2,11 +2,56 @@ using DeviceDebugStudio.Core.Transports;
 using DeviceDebugStudio.Infrastructure.Persistence;
 using DeviceDebugStudio.Infrastructure.Transports;
 using Microsoft.Data.Sqlite;
+using Windows.Devices.Bluetooth;
+using Windows.Devices.Enumeration;
+using Xunit.Abstractions;
 
 namespace DeviceDebugStudio.Tests;
 
-public sealed class HardwareAndPerformanceTests
+public sealed class HardwareAndPerformanceTests(ITestOutputHelper output)
 {
+    [Fact]
+    public void BleAdvertisementWithoutNameDoesNotEraseKnownDeviceName()
+    {
+        BleDeviceInfo device = new(0x41348241E559, "atao", -62);
+
+        BleDeviceInfo updated = device.MergeAdvertisement(string.Empty, -55);
+
+        Assert.Equal("atao", updated.Name);
+        Assert.Equal("atao", updated.DisplayName);
+        Assert.Equal(-55, updated.Rssi);
+    }
+
+    [Fact]
+    public void BleAdvertisementRefreshesDeviceNameWhenOneBecomesAvailable()
+    {
+        BleDeviceInfo device = new(0x41348241E559, string.Empty, -62);
+
+        BleDeviceInfo updated = device.MergeAdvertisement(" atao ", -55);
+
+        Assert.Equal("atao", updated.Name);
+        Assert.Equal("atao", updated.DisplayName);
+    }
+
+    [Fact]
+    public void BleSystemDisplayNameOverridesAdvertisementName()
+    {
+        BleDeviceInfo device = new(0x41348241E559, "advertisement-name", -55);
+
+        BleDeviceInfo updated = device.WithSystemDisplayName(" atao ");
+
+        Assert.Equal("atao", updated.Name);
+        Assert.Equal("atao", updated.DisplayName);
+    }
+
+    [Fact]
+    public void BleDeviceWithoutSystemNameUsesWindowsUnknownDeviceLabel()
+    {
+        BleDeviceInfo device = new(0x41348241E559, string.Empty, -55);
+
+        Assert.Equal("未知设备", device.DisplayName);
+    }
+
     [Fact]
     [Trait("Category", "LongRunning")]
     public async Task CapturePipelineStoresThirtyMinutesAtOneMegabitEquivalentVolume()
@@ -58,7 +103,42 @@ public sealed class HardwareAndPerformanceTests
             return;
         }
 
-        IReadOnlyList<BleDeviceInfo> devices = await new BleDiscoveryService().ScanAsync(TimeSpan.FromSeconds(4));
+        BleDiscoveryService discovery = new();
+        IReadOnlyList<BleDeviceInfo> devices = await discovery.ScanAsync(TimeSpan.FromSeconds(4));
+        foreach (BleDeviceInfo device in devices)
+        {
+            output.WriteLine($"BLE GATT: {device.DisplayName}; address={device.AddressText}");
+        }
+        output.WriteLine($"经典蓝牙: {string.Join("、", discovery.LastClassicDeviceNames)}");
         Assert.NotNull(devices);
+    }
+
+    [Fact]
+    [Trait("Category", "Hardware")]
+    public async Task WindowsBleAssociationEndpointsExposeSystemDisplayNames()
+    {
+        if (Environment.GetEnvironmentVariable("DEVICEDEBUGSTUDIO_HARDWARE_TESTS") != "1")
+        {
+            return;
+        }
+
+        foreach (bool paired in new[] { false, true })
+        {
+            string selector = BluetoothLEDevice.GetDeviceSelectorFromPairingState(paired);
+            DeviceInformationCollection devices = await DeviceInformation.FindAllAsync(selector);
+            foreach (DeviceInformation deviceInfo in devices)
+            {
+                using BluetoothLEDevice? device = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id);
+                output.WriteLine($"paired={paired}; name={deviceInfo.Name}; address={device?.BluetoothAddress:X12}; id={deviceInfo.Id}");
+            }
+        }
+
+        string classicSelector = BluetoothDevice.GetDeviceSelectorFromPairingState(false);
+        DeviceInformationCollection classicDevices = await DeviceInformation.FindAllAsync(classicSelector);
+        foreach (DeviceInformation deviceInfo in classicDevices)
+        {
+            using BluetoothDevice? device = await BluetoothDevice.FromIdAsync(deviceInfo.Id);
+            output.WriteLine($"classic; name={deviceInfo.Name}; address={device?.BluetoothAddress:X12}; id={deviceInfo.Id}");
+        }
     }
 }

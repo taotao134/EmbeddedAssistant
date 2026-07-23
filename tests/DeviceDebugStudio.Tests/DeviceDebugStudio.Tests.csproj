@@ -10,6 +10,7 @@
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\DeviceDebugStudio.App\DeviceDebugStudio.App.csproj" />
     <ProjectReference Include="..\..\src\DeviceDebugStudio.Core\DeviceDebugStudio.Core.csproj" />
     <ProjectReference Include="..\..\src\DeviceDebugStudio.Infrastructure\DeviceDebugStudio.Infrastructure.csproj" />
   </ItemGroup>

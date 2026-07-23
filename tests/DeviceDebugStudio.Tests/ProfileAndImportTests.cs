@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using DeviceDebugStudio.Core.Profiles;
 using DeviceDebugStudio.Core.Transports;
 using DeviceDebugStudio.Infrastructure.Import;
@@ -9,17 +10,62 @@ namespace DeviceDebugStudio.Tests;
 public sealed class ProfileAndImportTests
 {
     [Fact]
+    public void AppSettingsRoundTripsTerminalColumnWidths()
+    {
+        AppSettings settings = new()
+        {
+            TerminalTimeColumnWidth = 96,
+            TerminalDirectionColumnWidth = 54,
+            TerminalEndpointColumnWidth = 184,
+            TerminalSizeColumnWidth = 72,
+            TerminalContentColumnWidth = 640
+        };
+
+        string json = JsonSerializer.Serialize(settings);
+        AppSettings loaded = Assert.IsType<AppSettings>(JsonSerializer.Deserialize<AppSettings>(json));
+
+        Assert.Equal(96, loaded.TerminalTimeColumnWidth);
+        Assert.Equal(54, loaded.TerminalDirectionColumnWidth);
+        Assert.Equal(184, loaded.TerminalEndpointColumnWidth);
+        Assert.Equal(72, loaded.TerminalSizeColumnWidth);
+        Assert.Equal(640, loaded.TerminalContentColumnWidth);
+
+        AppSettings defaults = Assert.IsType<AppSettings>(JsonSerializer.Deserialize<AppSettings>("{}"));
+        Assert.Equal(AppSettings.DefaultTerminalTimeColumnWidth, defaults.TerminalTimeColumnWidth);
+        Assert.Equal(AppSettings.DefaultTerminalContentColumnWidth, defaults.TerminalContentColumnWidth);
+    }
+
+    [Fact]
     public async Task ProfileStoreRoundTripsPolymorphicTransportSettings()
     {
         string directory = CreateTemporaryDirectory();
         try
         {
             JsonDeviceProfileStore store = new(directory);
+            QuickCommandVariableSet low = new()
+            {
+                Name = "低速",
+                Variables =
+                [
+                    new QuickCommandVariable { Name = "id", Value = "10", Type = "数值" },
+                    new QuickCommandVariable { Name = "speed", Value = "14" }
+                ]
+            };
+            QuickCommandVariableSet high = new()
+            {
+                Name = "高速",
+                Variables =
+                [
+                    new QuickCommandVariable { Name = "id", Value = "20" },
+                    new QuickCommandVariable { Name = "speed", Value = "20" }
+                ]
+            };
             DeviceProfile profile = new()
             {
                 Name = "回归设备",
                 WorkspaceMode = WorkspaceMode.Bluetooth,
                 Transport = new BleGattTransportSettings(),
+                Terminal = new TerminalPreferences { QuickCommandDataFormat = "ASCII" },
                 CommandGroups =
                 [
                     new QuickCommandGroup
@@ -31,6 +77,10 @@ public sealed class ProfileAndImportTests
                                 Name = "查询",
                                 Payload = "AT",
                                 UsageCount = 12,
+                                NameColumnWeight = 96,
+                                PayloadColumnWeight = 336,
+                                VariableSets = [low, high],
+                                SelectedVariableSetId = high.Id,
                                 LastUsedAt = DateTimeOffset.Parse("2026-07-15T12:00:00+08:00")
                             }
                         ]
@@ -44,8 +94,20 @@ public sealed class ProfileAndImportTests
             Assert.Equal(profile.Id, loaded.Id);
             Assert.Equal(WorkspaceMode.Bluetooth, loaded.WorkspaceMode);
             Assert.IsType<BleGattTransportSettings>(loaded.Transport);
+            Assert.Equal("ASCII", loaded.Terminal.QuickCommandDataFormat);
             Assert.Equal("查询", loaded.CommandGroups[0].Commands[0].Name);
             Assert.Equal(12, loaded.CommandGroups[0].Commands[0].UsageCount);
+            Assert.Equal(96, loaded.CommandGroups[0].Commands[0].NameColumnWeight);
+            Assert.Equal(336, loaded.CommandGroups[0].Commands[0].PayloadColumnWeight);
+            QuickCommand loadedCommand = loaded.CommandGroups[0].Commands[0];
+            Assert.Collection(
+                loadedCommand.VariableSets,
+                variableSet => Assert.Equal("低速", variableSet.Name),
+                variableSet => Assert.Equal("高速", variableSet.Name));
+            Assert.Equal(high.Id, loadedCommand.SelectedVariableSetId);
+            Assert.Equal("10", loadedCommand.VariableSets[0].Variables[0].Value);
+            Assert.Equal("数值", loadedCommand.VariableSets[0].Variables[0].Type);
+            Assert.Equal("14", loadedCommand.VariableSets[0].Variables[1].Value);
             Assert.Equal(profile.CommandGroups[0].Commands[0].LastUsedAt, loaded.CommandGroups[0].Commands[0].LastUsedAt);
         }
         finally
@@ -64,7 +126,7 @@ public sealed class ProfileAndImportTests
             string path = Path.Combine(directory, "sscom51.ini");
             await File.WriteAllTextAsync(
                 path,
-                "N1=T,AT\r\nN101=0,状态查询,500\r\nN1080=COM3\r\nN1081=115200\r\n",
+                "N1=T,AT\r\nN101=0,状态查询,500\r\nN1057=Y\r\nN1080=COM3\r\nN1081=115200\r\n",
                 Encoding.GetEncoding(936));
 
             LegacyImportResult result = await new LegacyConfigImporter().ImportFilesAsync([path]);
@@ -78,6 +140,7 @@ public sealed class ProfileAndImportTests
             Assert.Equal("状态查询", command.Name);
             Assert.Equal("AT", command.Payload);
             Assert.Equal(500, command.RepeatIntervalMs);
+            Assert.Equal("CRLF", command.LineEnding);
         }
         finally
         {
@@ -98,7 +161,30 @@ public sealed class ProfileAndImportTests
                 Name = "网络设备",
                 WorkspaceMode = WorkspaceMode.Network,
                 Transport = new UdpTransportSettings { LocalPort = 6000, RemotePort = 7000 },
-                CommandGroups = [new QuickCommandGroup { Commands = [new QuickCommand { Name = "启动", UsageCount = 8 }] }]
+                CommandGroups =
+                [
+                    new QuickCommandGroup
+                    {
+                        Commands =
+                        [
+                            new QuickCommand
+                            {
+                                Name = "启动",
+                                UsageCount = 8,
+                                NameColumnWeight = 110,
+                                PayloadColumnWeight = 322,
+                                VariableSets =
+                                [
+                                    new QuickCommandVariableSet
+                                    {
+                                        Name = "通道 2",
+                                        Variables = [new QuickCommandVariable { Name = "channel", Value = "02" }]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
             };
 
             await service.ExportAsync(source, path);
@@ -108,6 +194,13 @@ public sealed class ProfileAndImportTests
             Assert.Equal(source.Name, imported.Name);
             Assert.Equal(WorkspaceMode.Network, imported.WorkspaceMode);
             Assert.Equal(8, imported.CommandGroups[0].Commands[0].UsageCount);
+            Assert.Equal(110, imported.CommandGroups[0].Commands[0].NameColumnWeight);
+            Assert.Equal(322, imported.CommandGroups[0].Commands[0].PayloadColumnWeight);
+            QuickCommandVariableSet importedSet = Assert.Single(imported.CommandGroups[0].Commands[0].VariableSets);
+            QuickCommandVariable importedVariable = Assert.Single(importedSet.Variables);
+            Assert.Equal("通道 2", importedSet.Name);
+            Assert.Equal("channel", importedVariable.Name);
+            Assert.Equal("02", importedVariable.Value);
             Assert.Equal(6000, Assert.IsType<UdpTransportSettings>(imported.Transport).LocalPort);
         }
         finally

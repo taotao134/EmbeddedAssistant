@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using DeviceDebugStudio.Core.Protocol;
 using DeviceDebugStudio.Core.Transports;
@@ -48,6 +49,32 @@ public sealed record TerminalRecordItem(
         }
         return Content;
     }
+
+    public bool MatchesSearch(string? query, bool displayHex)
+    {
+        string searchText = query?.Trim() ?? string.Empty;
+        if (searchText.Length == 0)
+        {
+            return true;
+        }
+
+        return TimeText.Contains(searchText, StringComparison.OrdinalIgnoreCase)
+            || Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture)
+                .Contains(searchText, StringComparison.OrdinalIgnoreCase)
+            || Size.ToString(CultureInfo.InvariantCulture).Contains(searchText, StringComparison.OrdinalIgnoreCase)
+            || GetDisplayContent(displayHex).Contains(searchText, StringComparison.CurrentCultureIgnoreCase)
+            || Endpoint.Contains(searchText, StringComparison.CurrentCultureIgnoreCase)
+            || GetDirectionSearchText().Contains(searchText, StringComparison.CurrentCultureIgnoreCase);
+    }
+
+    private string GetDirectionSearchText() => Direction switch
+    {
+        PacketDirection.Receive => "RX 收 接收",
+        PacketDirection.Send => "TX 发 发送",
+        PacketDirection.Information => "INFO 信息",
+        PacketDirection.Error => "ERR 错误",
+        _ => DirectionText
+    };
 
     public static TerminalRecordItem FromPacket(TransportPacket packet, Encoding encoding)
     {

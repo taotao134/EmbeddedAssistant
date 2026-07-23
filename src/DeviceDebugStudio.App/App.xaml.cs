@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Text;
 using System.Windows;
 using System.Windows.Threading;
@@ -19,6 +20,8 @@ public partial class App : Application
 {
     public const string DefaultTerminalTextColor = "#E6EBE8";
     public const string DefaultTerminalBackgroundColor = "#141817";
+    public const string DarkThemeTerminalTextColor = "#FFFFFF";
+    public const string DarkThemeTerminalBackgroundColor = "#000000";
     public static IReadOnlyList<string> DefaultTerminalTextPalette { get; } =
         ["#E6EBE8", "#7FE2B8", "#F7C574", "#9CDCFE", "#DCDCAA", "#FF8F8F", "#C586C0", "#7AA2F7"];
     public static IReadOnlyList<string> DefaultTerminalBackgroundPalette { get; } =
@@ -29,6 +32,7 @@ public partial class App : Application
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        Stopwatch startupStopwatch = Stopwatch.StartNew();
         base.OnStartup(e);
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         Log.Logger = new LoggerConfiguration()
@@ -68,9 +72,17 @@ public partial class App : Application
             ApplicationTheme theme = systemTheme == SystemTheme.Dark ? ApplicationTheme.Dark : ApplicationTheme.Light;
             ApplyTheme(theme);
 
+            AppSettings startupSettings = await _host.Services
+                .GetRequiredService<AppSettingsStore>()
+                .LoadAsync();
+            ApplyTerminalColorsForTheme(theme, startupSettings.TerminalTextColor, startupSettings.TerminalBackgroundColor);
+
             MainWindowViewModel viewModel = _host.Services.GetRequiredService<MainWindowViewModel>();
-            await viewModel.InitializeAsync();
-            _host.Services.GetRequiredService<MainWindow>().Show();
+            MainWindow mainWindow = _host.Services.GetRequiredService<MainWindow>();
+            mainWindow.Show();
+            Log.Information("主窗口已显示，启动耗时 {ElapsedMilliseconds} ms", startupStopwatch.ElapsedMilliseconds);
+            await viewModel.InitializeAsync(startupSettings);
+            Log.Information("配置初始化完成，总耗时 {ElapsedMilliseconds} ms", startupStopwatch.ElapsedMilliseconds);
         }
         catch (Exception exception)
         {
@@ -105,6 +117,10 @@ public partial class App : Application
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#39403C" : "#D7DDD8"));
         Current.Resources["MutedTextBrush"] = new System.Windows.Media.SolidColorBrush(
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#A9B3AD" : "#66706A"));
+        Current.Resources["AccentSubtleBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#2400A896" : "#0F00796B"));
+        Current.Resources["AccentSoftBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#3D00A896" : "#2400796B"));
         Current.Resources["ButtonSurfaceBrush"] = new System.Windows.Media.SolidColorBrush(
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#2A2F2C" : "#FFFFFF"));
         Current.Resources["ButtonForegroundBrush"] = new System.Windows.Media.SolidColorBrush(
@@ -115,10 +131,37 @@ public partial class App : Application
     {
         string normalizedText = NormalizeTerminalColor(textColor, DefaultTerminalTextColor);
         string normalizedBackground = NormalizeTerminalColor(backgroundColor, DefaultTerminalBackgroundColor);
-        Current.Resources["TerminalTextBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(normalizedText));
-        Current.Resources["TerminalBackgroundBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(normalizedBackground));
+        SetResourceBrushColor("TerminalTextBrush", normalizedText);
+        SetResourceBrushColor("TerminalBackgroundBrush", normalizedBackground);
+    }
+
+    public static void ApplyTerminalColorsForTheme(
+        ApplicationTheme theme,
+        string textColor,
+        string backgroundColor)
+    {
+        if (theme == ApplicationTheme.Dark)
+        {
+            ApplyTerminalColors(DarkThemeTerminalTextColor, DarkThemeTerminalBackgroundColor);
+            return;
+        }
+
+        ApplyTerminalColors(textColor, backgroundColor);
+    }
+
+    private static void SetResourceBrushColor(string resourceKey, string colorText)
+    {
+        System.Windows.Media.Color color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(colorText);
+        if (Current.Resources[resourceKey] is System.Windows.Media.SolidColorBrush brush && !brush.IsFrozen)
+        {
+            if (brush.Color != color)
+            {
+                brush.Color = color;
+            }
+            return;
+        }
+
+        Current.Resources[resourceKey] = new System.Windows.Media.SolidColorBrush(color);
     }
 
     public static string NormalizeTerminalColor(string? value, string fallback)

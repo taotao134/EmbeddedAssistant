@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -20,6 +21,7 @@ using DeviceDebugStudio.Core.Transports;
 using DeviceDebugStudio.Infrastructure.Import;
 using DeviceDebugStudio.Infrastructure.Persistence;
 using DeviceDebugStudio.Infrastructure.Transports;
+using Wpf.Ui.Appearance;
 
 namespace DeviceDebugStudio.App.ViewModels;
 
@@ -28,6 +30,9 @@ public sealed record WorkspaceModeOption(WorkspaceMode Mode, string Name);
 
 public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
+    private static readonly IReadOnlyDictionary<string, string> EmptyVariables =
+        new Dictionary<string, string>();
+
     private readonly IConfigurableDeviceProfileStore _profileStore;
     private readonly LegacyConfigImporter _legacyImporter;
     private readonly AppSettingsStore _appSettingsStore;
@@ -67,7 +72,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private DateTimeOffset _lastFrameInput;
     private bool _idleGapFlushed = true;
     private bool _suppressProfileSelection;
+    private bool _replacingQuickCommands;
     private bool _suppressSendModeConversion;
+    private bool _loadingTerminalDisplaySettings;
     private DeviceProfile? _activeProfile;
     private Task _lastProfileSaveTask = Task.CompletedTask;
     private Task _lastAppSettingsSaveTask = Task.CompletedTask;
@@ -94,6 +101,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         selectedTransportOption = TransportOptions[0];
         selectedWorkspaceMode = WorkspaceModes[0];
         selectedQuickCommandSort = QuickCommandSortOptions[0];
+        selectedQuickCommandDataFormat = QuickCommandDataFormats[0];
         selectedEncodingName = "UTF-8";
         selectedLineEnding = "None";
         selectedSendChecksum = ChecksumKind.None;
@@ -151,7 +159,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             ModbusRegisters.Add(item);
         }
 
-        RefreshPorts();
     }
 
     public IReadOnlyList<TransportOption> TransportOptions { get; } =
@@ -173,6 +180,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public ObservableCollection<TransportOption> AvailableTransportOptions { get; } = [];
     public IReadOnlyList<string> QuickCommandSortOptions { get; } = ["使用频率", "最近使用", "手动顺序"];
+    public IReadOnlyList<string> QuickCommandDataFormats { get; } = ["按指令", "ASCII", "UTF-8", "GBK", "HEX"];
 
     public IReadOnlyList<int> BaudRates { get; } = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600, 1000000, 2000000];
     public IReadOnlyList<string> EncodingNames { get; } = ["ASCII", "UTF-8", "GBK"];
@@ -191,7 +199,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<BleGattServiceInfo> GattServices { get; } = [];
     public ObservableCollection<TerminalRecordItem> TerminalRecords { get; } = [];
     public ObservableCollection<FrameRecordItem> FrameRecords { get; } = [];
-    public ObservableCollection<QuickCommandItemViewModel> QuickCommands { get; } = [];
+    public RangeObservableCollection<QuickCommandItemViewModel> QuickCommands { get; } = [];
     public ObservableCollection<ColorPaletteItem> TerminalTextPalette { get; } = [];
     public ObservableCollection<ColorPaletteItem> TerminalBackgroundPalette { get; } = [];
     public ICollectionView QuickCommandsView { get; }
@@ -199,6 +207,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public event Action<int>? RecordsAppended;
     public event Action<double>? ChartValueAdded;
+    public event Action<QuickCommandItemViewModel>? QuickCommandAdded;
 
     [ObservableProperty]
     private DeviceProfile? selectedProfile;
@@ -243,6 +252,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private bool rtsEnable;
 
     [ObservableProperty]
+    private int receiveTimeoutMs = 20;
+
+    [ObservableProperty]
     private bool autoReconnect;
 
     [ObservableProperty]
@@ -265,6 +277,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     [ObservableProperty]
     private BleDeviceInfo? selectedBleDevice;
+
+    [ObservableProperty]
+    private string bleDiscoveryNotice = string.Empty;
 
     [ObservableProperty]
     private string bleServiceUuid = string.Empty;
@@ -321,9 +336,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private bool checksumLittleEndian = true;
 
     [ObservableProperty]
-    private string variablesText = string.Empty;
-
-    [ObservableProperty]
     private bool isPaused;
 
     [ObservableProperty]
@@ -331,6 +343,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     [ObservableProperty]
     private double terminalFontSize = 12;
+
+    public double TerminalTimeColumnWidth { get; private set; } = AppSettings.DefaultTerminalTimeColumnWidth;
+    public double TerminalDirectionColumnWidth { get; private set; } = AppSettings.DefaultTerminalDirectionColumnWidth;
+    public double TerminalEndpointColumnWidth { get; private set; } = AppSettings.DefaultTerminalEndpointColumnWidth;
+    public double TerminalSizeColumnWidth { get; private set; } = AppSettings.DefaultTerminalSizeColumnWidth;
+    public double TerminalContentColumnWidth { get; private set; } = AppSettings.DefaultTerminalContentColumnWidth;
 
     [ObservableProperty]
     private string terminalTextColor = App.DefaultTerminalTextColor;
@@ -346,6 +364,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     [ObservableProperty]
     private string selectedQuickCommandSort;
+
+    [ObservableProperty]
+    private string selectedQuickCommandDataFormat;
+
+    [ObservableProperty]
+    private QuickCommandItemViewModel? selectedQuickCommand;
 
     [ObservableProperty]
     private FramingMode selectedFramingMode;
@@ -417,9 +441,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public bool IsChartWorkspaceVisible => SelectedWorkspaceMode.Mode is WorkspaceMode.Serial or WorkspaceMode.Network or WorkspaceMode.Bluetooth;
     public string TerminalTabHeader => IsModbusWorkspace ? "通信记录" : "终端";
 
-    public async Task InitializeAsync()
+    public async Task InitializeAsync(AppSettings? startupSettings = null)
     {
-        AppSettings settings = await _appSettingsStore.LoadAsync().ConfigureAwait(true);
+        AppSettings settings = startupSettings ?? await _appSettingsStore.LoadAsync().ConfigureAwait(true);
         try
         {
             _profileStore.SetDirectory(settings.ProfileDirectory);
@@ -429,14 +453,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _profileStore.SetDirectory(AppPaths.ProfilesDirectory);
         }
         ProfileDirectory = _profileStore.DirectoryPath;
-        TerminalFontSize = Math.Clamp(Math.Round(settings.TerminalFontSize), 9, 28);
-        TerminalTextColor = App.NormalizeTerminalColor(settings.TerminalTextColor, App.DefaultTerminalTextColor);
-        TerminalBackgroundColor = App.NormalizeTerminalColor(settings.TerminalBackgroundColor, App.DefaultTerminalBackgroundColor);
-        LoadTerminalPalette(TerminalTextPalette, settings.TerminalTextPalette, App.DefaultTerminalTextPalette);
-        LoadTerminalPalette(TerminalBackgroundPalette, settings.TerminalBackgroundPalette, App.DefaultTerminalBackgroundPalette);
-        App.ApplyTerminalColors(TerminalTextColor, TerminalBackgroundColor);
+        ApplyTerminalDisplaySettings(settings);
         UpdateAvailableTransportOptions();
-        await ReloadProfilesAsync().ConfigureAwait(true);
+        await ReloadProfilesAsync(settings.SelectedProfileId).ConfigureAwait(true);
         if (Profiles.Count == 0)
         {
             DeviceProfile profile = new()
@@ -458,10 +477,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             await _profileStore.SaveAsync(profile).ConfigureAwait(true);
             await ReloadProfilesAsync(profile.Id).ConfigureAwait(true);
         }
-        else
-        {
-            SelectedProfile = Profiles[0];
-        }
+        StartPortRefreshInBackground();
     }
 
     public async Task ImportLegacyAsync(string directory)
@@ -627,17 +643,43 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public string ExportTerminalText() => string.Join(Environment.NewLine, TerminalRecords.Select(item =>
         $"{item.Timestamp:O}\t{item.DirectionText}\t{item.Endpoint}\t{item.GetDisplayContent(ReceiveAsHex)}"));
 
-    [RelayCommand]
-    private void RefreshPorts()
+    public string ExportTerminalTableCsv()
     {
-        ApplyPortList(SerialPortDiscovery.GetPorts());
+        StringBuilder builder = new();
+        builder.AppendLine("时间,方向,端点,字节,内容");
+        foreach (TerminalRecordItem item in TerminalRecords)
+        {
+            AppendCsvField(builder, item.TimeText);
+            builder.Append(',');
+            AppendCsvField(builder, item.DirectionText);
+            builder.Append(',');
+            AppendCsvField(builder, item.Endpoint);
+            builder.Append(',').Append(item.Size.ToString(CultureInfo.InvariantCulture)).Append(',');
+            AppendCsvField(builder, item.GetDisplayContent(ReceiveAsHex));
+            builder.AppendLine();
+        }
+        return builder.ToString();
+    }
+
+    private static void AppendCsvField(StringBuilder builder, string value) =>
+        builder.Append('"').Append(value.Replace("\"", "\"\"", StringComparison.Ordinal)).Append('"');
+
+    [RelayCommand]
+    private async Task RefreshPortsAsync()
+    {
+        if (Interlocked.Exchange(ref _portRefreshRunning, 1) != 0)
+        {
+            return;
+        }
+        await RefreshPortsInBackgroundAsync().ConfigureAwait(true);
     }
 
     [RelayCommand]
     private async Task ScanBleAsync()
     {
         IsBusy = true;
-        StatusText = "正在扫描 BLE 设备…";
+        BleDiscoveryNotice = string.Empty;
+        StatusText = "正在扫描 Windows 蓝牙设备…";
         try
         {
             IReadOnlyList<BleDeviceInfo> devices = await _bleDiscovery.ScanAsync(TimeSpan.FromSeconds(4)).ConfigureAwait(true);
@@ -645,6 +687,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             foreach (BleDeviceInfo device in devices)
             {
                 BleDevices.Add(device);
+            }
+            if (_bleDiscovery.LastClassicDeviceNames.Count > 0)
+            {
+                string classicNames = string.Join("、", _bleDiscovery.LastClassicDeviceNames);
+                BleDiscoveryNotice = $"检测到经典蓝牙：{classicNames}。BLE GATT 模式无法连接这些设备。";
             }
             StatusText = $"发现 {devices.Count} 个 BLE 设备";
         }
@@ -710,10 +757,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public bool CanSend => CanUseConnectedSession && !string.IsNullOrEmpty(SendText);
 
     private bool CanSendQuickCommand(QuickCommandItemViewModel? command) =>
-        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.Payload);
+        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.TemplateOrPayload);
 
     private bool CanToggleQuickRepeat(QuickCommandItemViewModel? command) =>
-        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.Payload);
+        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.TemplateOrPayload);
 
     [RelayCommand(CanExecute = nameof(CanSend))]
     private async Task SendAsync()
@@ -750,14 +797,29 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             return;
         }
-        if (await SendPayloadAsync(command.Payload, command.IsHex, command.LineEnding, command.Checksum, command.ChecksumLittleEndian).ConfigureAwait(true))
+
+        if (await SendQuickCommandPayloadAsync(command).ConfigureAwait(true))
         {
             command.RegisterUse();
             ScheduleProfileSave();
         }
     }
 
-    [RelayCommand(CanExecute = nameof(CanToggleQuickRepeat))]
+    private async Task<bool> SendQuickCommandPayloadAsync(QuickCommandItemViewModel command)
+    {
+        (bool isHex, Encoding encoding, string formatLabel) = ResolveQuickCommandDataFormat(command);
+        return await SendPayloadAsync(
+            command.TemplateOrPayload,
+            isHex,
+            command.LineEnding,
+            command.Checksum,
+            command.ChecksumLittleEndian,
+            encoding,
+            formatLabel,
+            BuildQuickCommandVariables(command)).ConfigureAwait(true);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanToggleQuickRepeat), AllowConcurrentExecutions = true)]
     private async Task ToggleQuickRepeatAsync(QuickCommandItemViewModel? command)
     {
         if (command is null)
@@ -767,23 +829,23 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (_repeatCommands.Remove(command.Id, out CancellationTokenSource? existing))
         {
-            existing.Cancel();
-            existing.Dispose();
+            CancelWithoutThrow(existing);
             command.IsRepeating = false;
             return;
         }
 
         CancellationTokenSource source = new();
+        CancellationToken cancellationToken = source.Token;
         _repeatCommands[command.Id] = source;
         command.IsRepeating = true;
         command.RegisterUse();
         ScheduleProfileSave();
         try
         {
-            while (!source.IsCancellationRequested)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                _ = await SendPayloadAsync(command.Payload, command.IsHex, command.LineEnding, command.Checksum, command.ChecksumLittleEndian).ConfigureAwait(true);
-                await Task.Delay(Math.Max(10, command.RepeatIntervalMs), source.Token).ConfigureAwait(true);
+                _ = await SendQuickCommandPayloadAsync(command).ConfigureAwait(true);
+                await Task.Delay(Math.Max(10, command.RepeatIntervalMs), cancellationToken).ConfigureAwait(true);
             }
         }
         catch (OperationCanceledException)
@@ -791,40 +853,165 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         finally
         {
-            command.IsRepeating = false;
+            if (_repeatCommands.TryGetValue(command.Id, out CancellationTokenSource? current)
+                && ReferenceEquals(current, source))
+            {
+                _repeatCommands.Remove(command.Id);
+                command.IsRepeating = false;
+            }
+            source.Dispose();
         }
+    }
+
+    private bool CanAddQuickCommandVariableSet(QuickCommandItemViewModel? command) =>
+        command is not null && QuickCommands.Contains(command);
+
+    [RelayCommand(CanExecute = nameof(CanAddQuickCommandVariableSet))]
+    private void AddQuickCommandVariableSet(QuickCommandItemViewModel? command)
+    {
+        command ??= SelectedQuickCommand;
+        if (command is null || !QuickCommands.Contains(command))
+        {
+            return;
+        }
+
+        int sequence = command.VariableSets.Count + 1;
+        QuickCommandVariableSetItemViewModel variableSet = new(new QuickCommandVariableSet
+        {
+            Name = $"方案 {sequence}",
+            Variables = GetCommandVariableNames(command.TemplateOrPayload)
+                .Select(name => new QuickCommandVariable { Name = name })
+                .ToList()
+        });
+        if (variableSet.Variables.Count == 0)
+        {
+            variableSet.Variables.Add(new QuickCommandVariableItemViewModel(
+                new QuickCommandVariable { Name = string.Empty }));
+            variableSet.Variables.Add(new QuickCommandVariableItemViewModel(
+                new QuickCommandVariable { Name = string.Empty }));
+        }
+        else if (variableSet.Variables.Count % 2 != 0)
+        {
+            variableSet.Variables.Add(new QuickCommandVariableItemViewModel(
+                new QuickCommandVariable { Name = string.Empty }));
+        }
+        command.VariableSets.Add(variableSet);
+        command.SelectedVariableSet = variableSet;
+        ScheduleProfileSave();
+    }
+
+    [RelayCommand]
+    private void DeleteQuickCommandVariableSet(QuickCommandVariableSetItemViewModel? variableSet)
+    {
+        QuickCommandItemViewModel? command = variableSet is null ? null : FindQuickCommand(variableSet);
+        if (command is null || variableSet is null || command.VariableSets.Count <= 1)
+        {
+            return;
+        }
+
+        int index = command.VariableSets.IndexOf(variableSet);
+        command.VariableSets.Remove(variableSet);
+        if (ReferenceEquals(command.SelectedVariableSet, variableSet))
+        {
+            command.SelectedVariableSet = command.VariableSets.Count == 0
+                ? null
+                : command.VariableSets[Math.Clamp(index, 0, command.VariableSets.Count - 1)];
+        }
+        ScheduleProfileSave();
+    }
+
+    [RelayCommand]
+    private void DuplicateQuickCommandVariableSet(QuickCommandVariableSetItemViewModel? variableSet)
+    {
+        QuickCommandItemViewModel? command = variableSet is null ? null : FindQuickCommand(variableSet);
+        if (command is null || variableSet is null)
+        {
+            return;
+        }
+
+        QuickCommandVariableSetItemViewModel copy = new(new QuickCommandVariableSet
+        {
+            Name = $"{variableSet.Name} 副本",
+            Variables = variableSet.Variables.Select(variable => new QuickCommandVariable
+            {
+                Name = variable.Name,
+                Value = variable.Value,
+                Type = variable.Type
+            }).ToList()
+        });
+        int index = command.VariableSets.IndexOf(variableSet);
+        command.VariableSets.Insert(index + 1, copy);
+        command.SelectedVariableSet = copy;
+        ScheduleProfileSave();
+    }
+
+    [RelayCommand]
+    private void AddQuickCommandVariable(QuickCommandVariableSetItemViewModel? variableSet)
+    {
+        if (variableSet is null || FindQuickCommand(variableSet) is null)
+        {
+            return;
+        }
+
+        HashSet<string> existing = variableSet.Variables
+            .Select(variable => variable.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        for (int added = 0; added < 2; added++)
+        {
+            int sequence = 1;
+            while (existing.Contains($"var{sequence}"))
+            {
+                sequence++;
+            }
+
+            string variableName = $"var{sequence}";
+            existing.Add(variableName);
+            variableSet.Variables.Add(new QuickCommandVariableItemViewModel(new QuickCommandVariable
+            {
+                Name = variableName
+            }));
+        }
+        ScheduleProfileSave();
+    }
+
+    [RelayCommand]
+    private void DeleteQuickCommandVariable(QuickCommandVariableItemViewModel? variable)
+    {
+        if (variable is null)
+        {
+            return;
+        }
+
+        QuickCommandVariableSetItemViewModel? variableSet = QuickCommands
+            .SelectMany(command => command.VariableSets)
+            .FirstOrDefault(candidate => candidate.Variables.Contains(variable));
+        if (variableSet is null)
+        {
+            return;
+        }
+        int index = variableSet.Variables.IndexOf(variable);
+        if (index < 0)
+        {
+            return;
+        }
+
+        int rowStart = index - index % 2;
+        int rowCount = Math.Min(2, variableSet.Variables.Count - rowStart);
+        for (int rowIndex = 0; rowIndex < rowCount; rowIndex++)
+        {
+            variableSet.Variables.RemoveAt(rowStart);
+        }
+        ScheduleProfileSave();
     }
 
     [RelayCommand]
     private void AddQuickCommand()
     {
-        QuickCommands.Add(new QuickCommandItemViewModel(new QuickCommand { Name = "新命令", Payload = string.Empty }));
+        QuickCommandItemViewModel command = new(new QuickCommand { Name = "新命令", Payload = string.Empty });
+        QuickCommands.Add(command);
+        SelectedQuickCommand = command;
+        QuickCommandAdded?.Invoke(command);
         ScheduleProfileSave();
-    }
-
-    [RelayCommand]
-    private void ApplyQuickCommandHexMode(QuickCommandItemViewModel? command)
-    {
-        if (command is null || string.IsNullOrEmpty(command.Payload))
-        {
-            return;
-        }
-
-        if (command.IsHex)
-        {
-            command.Payload = NormalizeHexInput(command.Payload);
-            StatusText = "快捷指令使用 HEX 输入";
-            return;
-        }
-
-        if (!TryConvertHexToReadableText(command.Payload, out string text))
-        {
-            StatusText = "快捷指令使用文本输入，内容保持不变";
-            return;
-        }
-
-        command.Payload = text;
-        StatusText = "快捷指令使用文本输入";
     }
 
     [RelayCommand]
@@ -833,7 +1020,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (command is not null)
         {
             StopQuickCommandRepeat(command);
+            int index = QuickCommands.IndexOf(command);
             QuickCommands.Remove(command);
+            if (ReferenceEquals(SelectedQuickCommand, command))
+            {
+                SelectedQuickCommand = QuickCommands.Count == 0
+                    ? null
+                    : QuickCommands[Math.Clamp(index, 0, QuickCommands.Count - 1)];
+            }
             ScheduleProfileSave();
         }
     }
@@ -854,6 +1048,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (selected.Length > 0)
         {
+            if (SelectedQuickCommand is not null && selected.Contains(SelectedQuickCommand))
+            {
+                SelectedQuickCommand = QuickCommands.FirstOrDefault();
+            }
             StatusText = $"已删除 {selected.Length} 条快捷指令";
             ScheduleProfileSave();
         }
@@ -878,10 +1076,41 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         if (_repeatCommands.Remove(command.Id, out CancellationTokenSource? source))
         {
-            source.Cancel();
-            source.Dispose();
+            CancelWithoutThrow(source);
         }
         command.IsRepeating = false;
+    }
+
+    private static void CancelWithoutThrow(CancellationTokenSource source)
+    {
+        try
+        {
+            source.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private QuickCommandItemViewModel? FindQuickCommand(QuickCommandVariableSetItemViewModel variableSet) =>
+        QuickCommands.FirstOrDefault(command => command.VariableSets.Contains(variableSet));
+
+    private static IReadOnlyDictionary<string, string> BuildQuickCommandVariables(QuickCommandItemViewModel command)
+        => command.SelectedVariableSet?.GetValues() ?? EmptyVariables;
+
+    private static IReadOnlyList<string> GetCommandVariableNames(string payload)
+    {
+        List<string> names = [];
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in Regex.Matches(payload, @"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"))
+        {
+            string name = match.Groups[1].Value;
+            if (seen.Add(name))
+            {
+                names.Add(name);
+            }
+        }
+        return names;
     }
 
     [RelayCommand]
@@ -1007,12 +1236,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _uiTimer.Stop();
         _profileSaveTimer.Stop();
         _appSettingsSaveTimer.Stop();
-        foreach (CancellationTokenSource source in _repeatCommands.Values)
-        {
-            source.Cancel();
-            source.Dispose();
-        }
+        CancellationTokenSource[] repeatSources = _repeatCommands.Values.ToArray();
         _repeatCommands.Clear();
+        foreach (CancellationTokenSource source in repeatSources)
+        {
+            CancelWithoutThrow(source);
+        }
         await SaveActiveProfileSnapshotAsync(showStatus: false).ConfigureAwait(true);
         await _lastProfileSaveTask.ConfigureAwait(true);
         await _lastAppSettingsSaveTask.ConfigureAwait(true);
@@ -1040,12 +1269,20 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 {
                     Profiles[index] = snapshot;
                 }
-                _lastProfileSaveTask = _profileStore.SaveAsync(snapshot);
+                _lastProfileSaveTask = QueueProfileSaveAsync(_lastProfileSaveTask, snapshot);
             }
         }
 
         LoadProfile(value);
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
     }
+
+    private Task QueueProfileSaveAsync(Task previousSave, DeviceProfile snapshot) => Task.Run(async () =>
+    {
+        await previousSave.ConfigureAwait(false);
+        await _profileStore.SaveAsync(snapshot).ConfigureAwait(false);
+    });
 
     partial void OnTerminalFontSizeChanged(double value)
     {
@@ -1060,12 +1297,83 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _appSettingsSaveTimer.Start();
     }
 
+    public void SaveTerminalColumnWidths(
+        double timeWidth,
+        double directionWidth,
+        double endpointWidth,
+        double sizeWidth,
+        double contentWidth)
+    {
+        TerminalTimeColumnWidth = NormalizeTerminalColumnWidth(
+            timeWidth,
+            AppSettings.DefaultTerminalTimeColumnWidth);
+        TerminalDirectionColumnWidth = NormalizeTerminalColumnWidth(
+            directionWidth,
+            AppSettings.DefaultTerminalDirectionColumnWidth);
+        TerminalEndpointColumnWidth = NormalizeTerminalColumnWidth(
+            endpointWidth,
+            AppSettings.DefaultTerminalEndpointColumnWidth);
+        TerminalSizeColumnWidth = NormalizeTerminalColumnWidth(
+            sizeWidth,
+            AppSettings.DefaultTerminalSizeColumnWidth);
+        TerminalContentColumnWidth = NormalizeTerminalColumnWidth(
+            contentWidth,
+            AppSettings.DefaultTerminalContentColumnWidth);
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
+    private static double NormalizeTerminalColumnWidth(double value, double fallback) =>
+        double.IsFinite(value) && value > 0 ? Math.Clamp(value, 24, 5000) : fallback;
+
+    private void ApplyTerminalDisplaySettings(AppSettings settings)
+    {
+        _loadingTerminalDisplaySettings = true;
+        try
+        {
+            TerminalFontSize = Math.Clamp(Math.Round(settings.TerminalFontSize), 9, 28);
+            TerminalTimeColumnWidth = NormalizeTerminalColumnWidth(
+                settings.TerminalTimeColumnWidth,
+                AppSettings.DefaultTerminalTimeColumnWidth);
+            TerminalDirectionColumnWidth = NormalizeTerminalColumnWidth(
+                settings.TerminalDirectionColumnWidth,
+                AppSettings.DefaultTerminalDirectionColumnWidth);
+            TerminalEndpointColumnWidth = NormalizeTerminalColumnWidth(
+                settings.TerminalEndpointColumnWidth,
+                AppSettings.DefaultTerminalEndpointColumnWidth);
+            TerminalSizeColumnWidth = NormalizeTerminalColumnWidth(
+                settings.TerminalSizeColumnWidth,
+                AppSettings.DefaultTerminalSizeColumnWidth);
+            TerminalContentColumnWidth = NormalizeTerminalColumnWidth(
+                settings.TerminalContentColumnWidth,
+                AppSettings.DefaultTerminalContentColumnWidth);
+            TerminalTextColor = App.NormalizeTerminalColor(settings.TerminalTextColor, App.DefaultTerminalTextColor);
+            TerminalBackgroundColor = App.NormalizeTerminalColor(settings.TerminalBackgroundColor, App.DefaultTerminalBackgroundColor);
+            LoadTerminalPalette(TerminalTextPalette, settings.TerminalTextPalette, App.DefaultTerminalTextPalette);
+            LoadTerminalPalette(TerminalBackgroundPalette, settings.TerminalBackgroundPalette, App.DefaultTerminalBackgroundPalette);
+        }
+        finally
+        {
+            _loadingTerminalDisplaySettings = false;
+        }
+
+        ApplyTerminalThemeColors(ApplicationThemeManager.GetAppTheme());
+    }
+
+    public void ApplyTerminalThemeColors(ApplicationTheme theme) =>
+        App.ApplyTerminalColorsForTheme(theme, TerminalTextColor, TerminalBackgroundColor);
+
     partial void OnTerminalTextColorChanged(string value) => ApplyTerminalColorChange(value, true);
 
     partial void OnTerminalBackgroundColorChanged(string value) => ApplyTerminalColorChange(value, false);
 
     private void ApplyTerminalColorChange(string value, bool isTextColor)
     {
+        if (_loadingTerminalDisplaySettings)
+        {
+            return;
+        }
+
         if (!App.TryNormalizeTerminalColor(value, out string normalized))
         {
             return;
@@ -1224,8 +1532,26 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         QuickCommandsView.Refresh();
     }
 
+    partial void OnSelectedQuickCommandDataFormatChanged(string value)
+    {
+        if (!QuickCommandDataFormats.Contains(value, StringComparer.OrdinalIgnoreCase))
+        {
+            SelectedQuickCommandDataFormat = QuickCommandDataFormats[0];
+            return;
+        }
+
+        ScheduleProfileSave();
+    }
+
+    partial void OnSelectedQuickCommandChanged(QuickCommandItemViewModel? value)
+    {
+        AddQuickCommandVariableSetCommand.NotifyCanExecuteChanged();
+        RefreshSendCommandAvailability();
+    }
+
     partial void OnPortNameChanged(string value) => OnPropertyChanged(nameof(ConnectionSummary));
     partial void OnBaudRateChanged(int value) => OnPropertyChanged(nameof(ConnectionSummary));
+    partial void OnReceiveTimeoutMsChanged(int value) => ScheduleProfileSave();
     partial void OnHostChanged(string value) => OnPropertyChanged(nameof(ConnectionSummary));
     partial void OnRemotePortChanged(int value) => OnPropertyChanged(nameof(ConnectionSummary));
     partial void OnLocalAddressChanged(string value) => OnPropertyChanged(nameof(ConnectionSummary));
@@ -1265,19 +1591,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _modbusSlave.UnitId = (byte)Math.Clamp(value, 0, byte.MaxValue);
     }
 
-    partial void OnSearchTextChanged(string value)
+    public bool IsTerminalRecordVisible(TerminalRecordItem item) =>
+        item.MatchesSearch(SearchText, ReceiveAsHex);
+
+    partial void OnSearchTextChanged(string value) => RefreshTerminalRecordsView();
+
+    partial void OnReceiveAsHexChanged(bool value) => RefreshTerminalRecordsView();
+
+    private void RefreshTerminalRecordsView()
     {
         ICollectionView view = CollectionViewSource.GetDefaultView(TerminalRecords);
-        view.Filter = item =>
-        {
-            if (string.IsNullOrWhiteSpace(value) || item is not TerminalRecordItem record)
-            {
-                return true;
-            }
-            return record.GetDisplayContent(ReceiveAsHex).Contains(value, StringComparison.CurrentCultureIgnoreCase)
-                || record.Endpoint.Contains(value, StringComparison.CurrentCultureIgnoreCase)
-                || record.DirectionText.Contains(value, StringComparison.OrdinalIgnoreCase);
-        };
+        view.Filter = item => item is not TerminalRecordItem record || IsTerminalRecordVisible(record);
         view.Refresh();
     }
 
@@ -1510,7 +1834,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private async Task<bool> SendPayloadAsync(string payload, bool isHex, string lineEnding, ChecksumKind checksum, bool littleEndian)
+    private async Task<bool> SendPayloadAsync(
+        string payload,
+        bool isHex,
+        string lineEnding,
+        ChecksumKind checksum,
+        bool littleEndian,
+        Encoding? textEncoding = null,
+        string? formatLabel = null,
+        IReadOnlyDictionary<string, string>? variables = null)
     {
         try
         {
@@ -1519,8 +1851,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 throw new InvalidOperationException("请先建立连接。 ");
             }
 
-            string expanded = ByteText.ExpandVariables(payload, ParseVariables());
-            byte[] data = ByteText.ParseInput(expanded, isHex, GetSelectedEncoding());
+            string expanded = ByteText.ExpandVariables(
+                payload,
+                variables ?? EmptyVariables);
+            byte[] data = ByteText.ParseInput(expanded, isHex, textEncoding ?? GetSelectedEncoding());
             byte[] ending = GetLineEnding(lineEnding);
             byte[] withEnding = new byte[data.Length + ending.Length];
             data.CopyTo(withEnding, 0);
@@ -1533,9 +1867,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             }
             CommunicationSession session = _session ?? throw new InvalidOperationException("请先建立连接。 ");
             await session.SendAsync(final, sentAsHex: isHex).ConfigureAwait(true);
-            StatusText = isHex
-                ? $"已发送 {final.Length} 字节（HEX 输入）"
-                : $"已发送 {final.Length} 字节（文本输入）";
+            StatusText = $"已发送 {final.Length} 字节（{formatLabel ?? (isHex ? "HEX 输入" : "文本输入")}）";
             return true;
         }
         catch (OperationCanceledException)
@@ -1591,11 +1923,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IReadOnlyList<TransportPacket> displayPackets;
         if (SelectedTransportKind == TransportKind.Serial)
         {
-            TimeSpan receiveGap = TimeSpan.FromMilliseconds(10);
+            TimeSpan receiveGap = TimeSpan.FromMilliseconds(Math.Clamp(ReceiveTimeoutMs, 1, 5000));
             _serialTerminalBuffer.AddRange(pendingPackets);
             int readyCount = TransportPacketCoalescer.GetReadyPrefixCount(
                 _serialTerminalBuffer,
                 DateTimeOffset.Now,
+                Stopwatch.GetTimestamp(),
                 receiveGap);
             List<TransportPacket> readyPackets = _serialTerminalBuffer.GetRange(0, readyCount);
             _serialTerminalBuffer.RemoveRange(0, readyCount);
@@ -1612,7 +1945,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 _serialTerminalBuffer.AddRange(pendingPackets);
                 displayPackets = TransportPacketCoalescer.CoalesceAdjacentReceives(
                     _serialTerminalBuffer,
-                    TimeSpan.FromMilliseconds(10));
+                    TimeSpan.FromMilliseconds(Math.Clamp(ReceiveTimeoutMs, 1, 5000)));
                 _serialTerminalBuffer.Clear();
             }
         }
@@ -1686,9 +2019,20 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 ApplyPortList(ports);
             }
         }
+        catch
+        {
+        }
         finally
         {
             Interlocked.Exchange(ref _portRefreshRunning, 0);
+        }
+    }
+
+    private void StartPortRefreshInBackground()
+    {
+        if (Interlocked.Exchange(ref _portRefreshRunning, 1) == 0)
+        {
+            _ = RefreshPortsInBackgroundAsync();
         }
     }
 
@@ -1716,7 +2060,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             WorkspaceMode.Serial => [TransportKind.Serial],
             WorkspaceMode.Network => [TransportKind.TcpClient, TransportKind.TcpServer, TransportKind.Udp],
             WorkspaceMode.Bluetooth => [TransportKind.BleGatt],
-            WorkspaceMode.Modbus => [TransportKind.Serial, TransportKind.TcpClient, TransportKind.TcpServer],
+            WorkspaceMode.Modbus => [TransportKind.Serial],
             _ => [TransportKind.Serial]
         };
         TransportKind previousKind = SelectedTransportOption?.Kind ?? kinds[0];
@@ -1738,6 +2082,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private void OnQuickCommandsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs args)
     {
+        if (_replacingQuickCommands)
+        {
+            return;
+        }
+
         if (args.OldItems is not null)
         {
             foreach (QuickCommandItemViewModel item in args.OldItems)
@@ -1759,11 +2108,68 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private void OnQuickCommandPropertyChanged(object? sender, PropertyChangedEventArgs args)
     {
+        if (args.PropertyName == nameof(QuickCommandItemViewModel.IsExpanded))
+        {
+            if (sender is QuickCommandItemViewModel { IsExpanded: true } expanded)
+            {
+                SelectedQuickCommand = expanded;
+                foreach (QuickCommandItemViewModel command in QuickCommands)
+                {
+                    if (!ReferenceEquals(command, expanded) && command.IsExpanded)
+                    {
+                        command.IsExpanded = false;
+                    }
+                }
+            }
+            return;
+        }
         if (args.PropertyName == nameof(QuickCommandItemViewModel.IsSelectedForBulkDelete))
         {
             DeleteSelectedQuickCommandsCommand.NotifyCanExecuteChanged();
         }
+        if (args.PropertyName is nameof(QuickCommandItemViewModel.Payload)
+            or nameof(QuickCommandItemViewModel.Template)
+            or nameof(QuickCommandItemViewModel.TemplateOrPayload)
+            or nameof(QuickCommandItemViewModel.VariableSets))
+        {
+            RefreshSendCommandAvailability();
+        }
+        if (args.PropertyName == nameof(QuickCommandItemViewModel.SelectedVariableSet)
+            && sender is QuickCommandItemViewModel { IsRepeating: true } repeating)
+        {
+            StopQuickCommandRepeat(repeating);
+            StatusText = "已切换变量方案，循环发送已停止";
+        }
         ScheduleProfileSave();
+    }
+
+    private void ReplaceQuickCommands(IReadOnlyList<QuickCommandItemViewModel> commands)
+    {
+        foreach (QuickCommandItemViewModel command in QuickCommands)
+        {
+            StopQuickCommandRepeat(command);
+            command.PropertyChanged -= OnQuickCommandPropertyChanged;
+        }
+
+        _replacingQuickCommands = true;
+        try
+        {
+            QuickCommands.ReplaceAll(commands);
+        }
+        finally
+        {
+            _replacingQuickCommands = false;
+        }
+
+        foreach (QuickCommandItemViewModel command in QuickCommands)
+        {
+            command.PropertyChanged += OnQuickCommandPropertyChanged;
+        }
+
+        SelectedQuickCommand = QuickCommands.FirstOrDefault();
+        QuickCommandsView.Refresh();
+        DeleteSelectedQuickCommandsCommand.NotifyCanExecuteChanged();
+        RefreshSendCommandAvailability();
     }
 
     private bool FilterQuickCommand(object item)
@@ -1773,7 +2179,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return true;
         }
         return command.Name.Contains(QuickCommandSearchText, StringComparison.CurrentCultureIgnoreCase)
-            || command.Payload.Contains(QuickCommandSearchText, StringComparison.CurrentCultureIgnoreCase);
+            || command.Payload.Contains(QuickCommandSearchText, StringComparison.CurrentCultureIgnoreCase)
+            || command.Template.Contains(QuickCommandSearchText, StringComparison.CurrentCultureIgnoreCase);
     }
 
     private void ApplyQuickCommandSort()
@@ -1939,14 +2346,25 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             }
 
             SelectedEncodingName = profile.Terminal.EncodingName;
+            SelectedQuickCommandDataFormat = NormalizeQuickCommandDataFormat(profile.Terminal.QuickCommandDataFormat);
             SendAsHex = profile.Terminal.SendAsHex;
             ReceiveAsHex = profile.Terminal.ReceiveAsHex;
+            ReceiveTimeoutMs = Math.Clamp(profile.Terminal.ReceiveTimeoutMs, 1, 5000);
             SelectedLineEnding = profile.Terminal.LineEnding;
-            QuickCommands.Clear();
+            List<QuickCommandItemViewModel> quickCommands = [];
             foreach (QuickCommand command in profile.CommandGroups.SelectMany(group => group.Commands))
             {
-                QuickCommands.Add(new QuickCommandItemViewModel(command));
+                QuickCommand normalizedCommand = command;
+                if (profile.Description.StartsWith("从 SSCOM 导入：", StringComparison.Ordinal)
+                    && string.Equals(command.LineEnding, "None", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(profile.Terminal.LineEnding, "None", StringComparison.OrdinalIgnoreCase))
+                {
+                    normalizedCommand = command with { LineEnding = profile.Terminal.LineEnding };
+                }
+
+                quickCommands.Add(new QuickCommandItemViewModel(normalizedCommand));
             }
+            ReplaceQuickCommands(quickCommands);
             LoadFrameTemplate(profile.FrameTemplate);
             _activeProfile = profile;
         }
@@ -1954,7 +2372,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             _suppressProfileSelection = previousSuppression;
         }
-        QuickCommandsView.Refresh();
     }
 
     private void LoadFrameTemplate(FrameTemplate template)
@@ -1985,10 +2402,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Terminal = new TerminalPreferences
         {
             EncodingName = SelectedEncodingName,
+            QuickCommandDataFormat = NormalizeQuickCommandDataFormat(SelectedQuickCommandDataFormat),
             SendAsHex = SendAsHex,
             ReceiveAsHex = ReceiveAsHex,
             ShowTimestamp = true,
             LineEnding = SelectedLineEnding,
+            ReceiveTimeoutMs = Math.Clamp(ReceiveTimeoutMs, 1, 5000),
             UiRecordLimit = _activeProfile?.Terminal.UiRecordLimit ?? 100_000
         },
         CommandGroups = [new QuickCommandGroup { Name = "常用命令", Commands = QuickCommands.Select(item => item.ToModel()).ToList() }],
@@ -2049,26 +2468,29 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _ => new RawFrameCodec()
     };
 
-    private Dictionary<string, string> ParseVariables()
-    {
-        Dictionary<string, string> variables = new(StringComparer.OrdinalIgnoreCase);
-        foreach (string line in VariablesText.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-        {
-            int separator = line.IndexOf('=');
-            if (separator > 0)
-            {
-                variables[line[..separator].Trim()] = line[(separator + 1)..].Trim();
-            }
-        }
-        return variables;
-    }
-
     private Encoding GetSelectedEncoding() => SelectedEncodingName.ToUpperInvariant() switch
     {
         "ASCII" => Encoding.ASCII,
         "GBK" => Encoding.GetEncoding(936),
         _ => new UTF8Encoding(false)
     };
+
+    private (bool IsHex, Encoding Encoding, string FormatLabel) ResolveQuickCommandDataFormat(
+        QuickCommandItemViewModel command) => NormalizeQuickCommandDataFormat(SelectedQuickCommandDataFormat) switch
+    {
+        "ASCII" => (false, Encoding.ASCII, "ASCII"),
+        "UTF-8" => (false, new UTF8Encoding(false), "UTF-8"),
+        "GBK" => (false, Encoding.GetEncoding(936), "GBK"),
+        "HEX" => (true, Encoding.ASCII, "HEX"),
+        _ => command.IsHex
+            ? (true, Encoding.ASCII, "HEX")
+            : (false, GetSelectedEncoding(), SelectedEncodingName)
+    };
+
+    private string NormalizeQuickCommandDataFormat(string? value) =>
+        QuickCommandDataFormats.FirstOrDefault(
+            item => string.Equals(item, value, StringComparison.OrdinalIgnoreCase))
+        ?? QuickCommandDataFormats[0];
 
     private string NormalizeHexInput(string value)
     {
@@ -2120,7 +2542,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             await _appSettingsStore.SaveAsync(new AppSettings
             {
                 ProfileDirectory = _profileStore.DirectoryPath,
+                SelectedProfileId = SelectedProfile?.Id,
                 TerminalFontSize = TerminalFontSize,
+                TerminalTimeColumnWidth = TerminalTimeColumnWidth,
+                TerminalDirectionColumnWidth = TerminalDirectionColumnWidth,
+                TerminalEndpointColumnWidth = TerminalEndpointColumnWidth,
+                TerminalSizeColumnWidth = TerminalSizeColumnWidth,
+                TerminalContentColumnWidth = TerminalContentColumnWidth,
                 TerminalTextColor = App.NormalizeTerminalColor(TerminalTextColor, App.DefaultTerminalTextColor),
                 TerminalBackgroundColor = App.NormalizeTerminalColor(TerminalBackgroundColor, App.DefaultTerminalBackgroundColor),
                 TerminalTextPalette = TerminalTextPalette.Select(item => item.Color).ToList(),

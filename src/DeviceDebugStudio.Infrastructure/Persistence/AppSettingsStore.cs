@@ -4,8 +4,20 @@ namespace DeviceDebugStudio.Infrastructure.Persistence;
 
 public sealed record AppSettings
 {
+    public const double DefaultTerminalTimeColumnWidth = 122;
+    public const double DefaultTerminalDirectionColumnWidth = 84;
+    public const double DefaultTerminalEndpointColumnWidth = 150;
+    public const double DefaultTerminalSizeColumnWidth = 66;
+    public const double DefaultTerminalContentColumnWidth = 760;
+
     public string ProfileDirectory { get; init; } = AppPaths.ProfilesDirectory;
+    public Guid? SelectedProfileId { get; init; }
     public double TerminalFontSize { get; init; } = 12;
+    public double TerminalTimeColumnWidth { get; init; } = DefaultTerminalTimeColumnWidth;
+    public double TerminalDirectionColumnWidth { get; init; } = DefaultTerminalDirectionColumnWidth;
+    public double TerminalEndpointColumnWidth { get; init; } = DefaultTerminalEndpointColumnWidth;
+    public double TerminalSizeColumnWidth { get; init; } = DefaultTerminalSizeColumnWidth;
+    public double TerminalContentColumnWidth { get; init; } = DefaultTerminalContentColumnWidth;
     public string TerminalTextColor { get; init; } = "#E6EBE8";
     public string TerminalBackgroundColor { get; init; } = "#141817";
     public List<string> TerminalTextPalette { get; init; } =

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DeviceDebugStudio.Core.Transports;
 
 namespace DeviceDebugStudio.Tests;
@@ -75,6 +76,45 @@ public sealed class TransportPacketCoalescerTests
             TimeSpan.FromMilliseconds(10));
 
         Assert.Equal(2, result.Count);
+    }
+
+    [Fact]
+    public void CoalesceAdjacentReceives_UsesMonotonicArrivalTimeWhenWallClockMatches()
+    {
+        DateTimeOffset displayedAt = DateTimeOffset.UtcNow;
+        long arrivedAt = Stopwatch.GetTimestamp();
+        long arrivedLater = arrivedAt + Math.Max(1, Stopwatch.Frequency / 500);
+        TransportPacket[] packets =
+        [
+            new(displayedAt, PacketDirection.Receive, [0x41], "COM4", ArrivalTimestamp: arrivedAt),
+            new(displayedAt, PacketDirection.Receive, [0x42], "COM4", ArrivalTimestamp: arrivedLater)
+        ];
+
+        IReadOnlyList<TransportPacket> result = TransportPacketCoalescer.CoalesceAdjacentReceives(
+            packets,
+            TimeSpan.FromMilliseconds(1));
+
+        Assert.Equal(2, result.Count);
+    }
+
+    [Fact]
+    public void GetReadyPrefixCount_UsesMonotonicArrivalTimeForIdleGap()
+    {
+        DateTimeOffset displayedAt = DateTimeOffset.UtcNow;
+        long arrivedAt = Stopwatch.GetTimestamp();
+        long checkedAt = arrivedAt + Math.Max(1, Stopwatch.Frequency / 500);
+        TransportPacket[] packets =
+        [
+            new(displayedAt, PacketDirection.Receive, [0x41], "COM4", ArrivalTimestamp: arrivedAt)
+        ];
+
+        int result = TransportPacketCoalescer.GetReadyPrefixCount(
+            packets,
+            displayedAt,
+            checkedAt,
+            TimeSpan.FromMilliseconds(1));
+
+        Assert.Equal(1, result);
     }
 
     [Fact]

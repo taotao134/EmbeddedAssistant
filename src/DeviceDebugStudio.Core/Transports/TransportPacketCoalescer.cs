@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace DeviceDebugStudio.Core.Transports;
 
 public static class TransportPacketCoalescer
@@ -5,6 +7,15 @@ public static class TransportPacketCoalescer
     public static int GetReadyPrefixCount(
         IReadOnlyList<TransportPacket> packets,
         DateTimeOffset now,
+        TimeSpan maximumGap)
+    {
+        return GetReadyPrefixCount(packets, now, 0, maximumGap);
+    }
+
+    public static int GetReadyPrefixCount(
+        IReadOnlyList<TransportPacket> packets,
+        DateTimeOffset now,
+        long nowArrivalTimestamp,
         TimeSpan maximumGap)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumGap, TimeSpan.Zero);
@@ -16,7 +27,7 @@ public static class TransportPacketCoalescer
         TransportPacket last = packets[^1];
         if (last.Direction != PacketDirection.Receive
             || last.Message is not null
-            || now - last.Timestamp >= maximumGap)
+            || GetElapsedToNow(last, now, nowArrivalTimestamp) >= maximumGap)
         {
             return packets.Count;
         }
@@ -26,7 +37,7 @@ public static class TransportPacketCoalescer
         {
             TransportPacket previous = packets[pendingStart - 1];
             TransportPacket current = packets[pendingStart];
-            TimeSpan gap = current.Timestamp - previous.Timestamp;
+            TimeSpan gap = GetElapsed(previous, current);
             if (previous.Direction != PacketDirection.Receive
                 || previous.Message is not null
                 || gap < TimeSpan.Zero
@@ -51,13 +62,13 @@ public static class TransportPacketCoalescer
 
         List<TransportPacket> result = [];
         TransportPacket? pending = null;
-        DateTimeOffset lastReceivedAt = default;
+        TransportPacket? lastReceived = null;
 
         foreach (TransportPacket packet in packets)
         {
             if (packet.Direction == PacketDirection.Receive && packet.Message is null)
             {
-                TimeSpan gap = packet.Timestamp - lastReceivedAt;
+                TimeSpan gap = lastReceived is null ? TimeSpan.Zero : GetElapsed(lastReceived, packet);
                 bool canMerge = pending is not null
                     && gap >= TimeSpan.Zero
                     && gap <= maximumGap
@@ -77,7 +88,7 @@ public static class TransportPacketCoalescer
                     pending = packet;
                 }
 
-                lastReceivedAt = packet.Timestamp;
+                lastReceived = packet;
                 continue;
             }
 
@@ -96,5 +107,28 @@ public static class TransportPacketCoalescer
                 pending = null;
             }
         }
+    }
+
+    private static TimeSpan GetElapsed(TransportPacket earlier, TransportPacket later)
+    {
+        if (earlier.ArrivalTimestamp > 0 && later.ArrivalTimestamp > 0)
+        {
+            return Stopwatch.GetElapsedTime(earlier.ArrivalTimestamp, later.ArrivalTimestamp);
+        }
+
+        return later.Timestamp - earlier.Timestamp;
+    }
+
+    private static TimeSpan GetElapsedToNow(
+        TransportPacket packet,
+        DateTimeOffset now,
+        long nowArrivalTimestamp)
+    {
+        if (packet.ArrivalTimestamp > 0 && nowArrivalTimestamp > 0)
+        {
+            return Stopwatch.GetElapsedTime(packet.ArrivalTimestamp, nowArrivalTimestamp);
+        }
+
+        return now - packet.Timestamp;
     }
 }

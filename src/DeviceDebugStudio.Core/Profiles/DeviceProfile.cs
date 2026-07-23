@@ -31,10 +31,12 @@ public sealed record DeviceProfile
 public sealed record TerminalPreferences
 {
     public string EncodingName { get; init; } = "UTF-8";
+    public string QuickCommandDataFormat { get; init; } = "按指令";
     public bool SendAsHex { get; init; }
     public bool ReceiveAsHex { get; init; }
     public bool ShowTimestamp { get; init; } = true;
     public string LineEnding { get; init; } = "None";
+    public int ReceiveTimeoutMs { get; init; } = 20;
     public int UiRecordLimit { get; init; } = 100_000;
 }
 
@@ -49,6 +51,7 @@ public sealed record QuickCommand
     public Guid Id { get; init; } = Guid.NewGuid();
     public string Name { get; init; } = "命令";
     public string Payload { get; init; } = string.Empty;
+    public string Template { get; init; } = string.Empty;
     public bool IsHex { get; init; }
     public string LineEnding { get; init; } = "None";
     public ChecksumKind Checksum { get; init; }
@@ -58,6 +61,26 @@ public sealed record QuickCommand
     public string Shortcut { get; init; } = string.Empty;
     public long UsageCount { get; init; }
     public DateTimeOffset? LastUsedAt { get; init; }
+    public double NameColumnWeight { get; init; } = 132;
+    public double PayloadColumnWeight { get; init; } = 300;
+    public List<QuickCommandVariable> Variables { get; init; } = [];
+    public List<QuickCommandVariableSet> VariableSets { get; init; } = [];
+    public Guid? SelectedVariableSetId { get; init; }
+}
+
+public sealed record QuickCommandVariable
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public string Name { get; init; } = "var";
+    public string Value { get; init; } = string.Empty;
+    public string Type { get; init; } = "文本";
+}
+
+public sealed record QuickCommandVariableSet
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public string Name { get; init; } = "参数套装";
+    public List<QuickCommandVariable> Variables { get; init; } = [];
 }
 
 public enum FramingMode

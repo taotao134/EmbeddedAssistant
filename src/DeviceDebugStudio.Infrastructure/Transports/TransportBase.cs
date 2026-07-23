@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Diagnostics;
 using System.Threading.Channels;
 using DeviceDebugStudio.Core.Transports;
 
@@ -95,7 +96,12 @@ public abstract class TransportBase : ITransport
     protected virtual ValueTask OnDisposeAsync() => ValueTask.CompletedTask;
 
     protected void PublishReceived(ReadOnlySpan<byte> data, string endpoint) =>
-        Publish(new TransportPacket(DateTimeOffset.Now, PacketDirection.Receive, data.ToArray(), endpoint));
+        Publish(new TransportPacket(
+            DateTimeOffset.Now,
+            PacketDirection.Receive,
+            data.ToArray(),
+            endpoint,
+            ArrivalTimestamp: Stopwatch.GetTimestamp()));
 
     protected void Publish(TransportPacket packet)
     {

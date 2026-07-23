@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json.Serialization;
 
 namespace DeviceDebugStudio.Core.Transports;
@@ -115,13 +116,14 @@ public sealed record TransportPacket(
     byte[] Data,
     string Endpoint,
     string? Message = null,
-    bool? SentAsHex = null)
+    bool? SentAsHex = null,
+    long ArrivalTimestamp = 0)
 {
     public static TransportPacket Info(string message, string endpoint = "系统") =>
-        new(DateTimeOffset.Now, PacketDirection.Information, [], endpoint, message);
+        new(DateTimeOffset.Now, PacketDirection.Information, [], endpoint, message, ArrivalTimestamp: Stopwatch.GetTimestamp());
 
     public static TransportPacket Error(string message, string endpoint = "系统") =>
-        new(DateTimeOffset.Now, PacketDirection.Error, [], endpoint, message);
+        new(DateTimeOffset.Now, PacketDirection.Error, [], endpoint, message, ArrivalTimestamp: Stopwatch.GetTimestamp());
 }
 
 public sealed record TransportStateChangedEventArgs(
