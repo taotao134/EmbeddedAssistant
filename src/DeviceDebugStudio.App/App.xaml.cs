@@ -8,6 +8,7 @@ using DeviceDebugStudio.Core.Profiles;
 using DeviceDebugStudio.Infrastructure.Import;
 using DeviceDebugStudio.Infrastructure.Persistence;
 using DeviceDebugStudio.Infrastructure.Transports;
+using DeviceDebugStudio.Infrastructure.Updates;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
@@ -58,6 +59,7 @@ public partial class App : Application
                 services.AddSingleton<AppSettingsStore>();
                 services.AddSingleton<DeviceProfileFileService>();
                 services.AddSingleton<CaptureFileReader>();
+                services.AddSingleton<OnlineUpdateService>();
                 services.AddSingleton<BleDiscoveryService>();
                 services.AddSingleton<BleGattBrowserService>();
                 services.AddSingleton<MainWindowViewModel>();

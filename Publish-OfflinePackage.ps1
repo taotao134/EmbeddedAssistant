@@ -5,6 +5,7 @@ $project = Join-Path $root 'src\DeviceDebugStudio.App\DeviceDebugStudio.App.cspr
 $releaseRoot = Join-Path $root 'ReleasePackages'
 $publishDir = Join-Path $releaseRoot '嵌入式调试台-win-x64'
 $zipPath = Join-Path $releaseRoot '嵌入式调试台-win-x64.zip'
+$checksumPath = Join-Path $releaseRoot '嵌入式调试台-win-x64.zip.sha256'
 
 if (-not (Test-Path -LiteralPath $dotnet)) {
     throw '未找到系统 .NET SDK。'
@@ -37,6 +38,9 @@ if (Test-Path -LiteralPath $zipPath) {
     Remove-Item -LiteralPath $zipPath -Force
 }
 Compress-Archive -Path (Join-Path $publishDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
+$checksum = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -LiteralPath $checksumPath -Value $checksum -Encoding ascii
 
 Write-Host "发布完成：$publishDir"
 Write-Host "压缩包：$zipPath"
+Write-Host "SHA-256：$checksumPath"

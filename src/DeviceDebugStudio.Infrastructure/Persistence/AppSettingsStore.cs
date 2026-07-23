@@ -4,6 +4,7 @@ namespace DeviceDebugStudio.Infrastructure.Persistence;
 
 public sealed record AppSettings
 {
+    public const string DefaultGitHubRepository = "taotao134/EmbeddedAssistant";
     public const double DefaultTerminalTimeColumnWidth = 122;
     public const double DefaultTerminalDirectionColumnWidth = 84;
     public const double DefaultTerminalEndpointColumnWidth = 150;
@@ -20,6 +21,8 @@ public sealed record AppSettings
     public double TerminalContentColumnWidth { get; init; } = DefaultTerminalContentColumnWidth;
     public string TerminalTextColor { get; init; } = "#E6EBE8";
     public string TerminalBackgroundColor { get; init; } = "#141817";
+    public string GitHubRepository { get; init; } = DefaultGitHubRepository;
+    public bool AutoUpdateEnabled { get; init; } = true;
     public List<string> TerminalTextPalette { get; init; } =
         ["#E6EBE8", "#7FE2B8", "#F7C574", "#9CDCFE", "#DCDCAA", "#FF8F8F", "#C586C0", "#7AA2F7"];
     public List<string> TerminalBackgroundPalette { get; init; } =

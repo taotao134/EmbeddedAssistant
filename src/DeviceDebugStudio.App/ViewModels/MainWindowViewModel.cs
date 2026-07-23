@@ -21,6 +21,7 @@ using DeviceDebugStudio.Core.Transports;
 using DeviceDebugStudio.Infrastructure.Import;
 using DeviceDebugStudio.Infrastructure.Persistence;
 using DeviceDebugStudio.Infrastructure.Transports;
+using DeviceDebugStudio.Infrastructure.Updates;
 using Wpf.Ui.Appearance;
 
 namespace DeviceDebugStudio.App.ViewModels;
@@ -38,6 +39,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly AppSettingsStore _appSettingsStore;
     private readonly DeviceProfileFileService _profileFileService;
     private readonly CaptureFileReader _captureFileReader;
+    private readonly OnlineUpdateService _updateService;
     private readonly BleDiscoveryService _bleDiscovery;
     private readonly BleGattBrowserService _bleGattBrowser;
     private readonly ConcurrentQueue<TransportPacket> _pendingTerminal = new();
@@ -45,6 +47,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly ConcurrentQueue<FrameRecordItem> _pendingFrames = new();
     private readonly ConcurrentQueue<double> _pendingChartValues = new();
     private readonly Dictionary<Guid, CancellationTokenSource> _repeatCommands = [];
+    private CancellationTokenSource? _sendRepeatCancellation;
     private readonly object _decoderSync = new();
     private readonly object _frameCodecSync = new();
     private readonly DispatcherTimer _uiTimer;
@@ -87,6 +90,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         AppSettingsStore appSettingsStore,
         DeviceProfileFileService profileFileService,
         CaptureFileReader captureFileReader,
+        OnlineUpdateService updateService,
         BleDiscoveryService bleDiscovery,
         BleGattBrowserService bleGattBrowser)
     {
@@ -95,6 +99,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _appSettingsStore = appSettingsStore;
         _profileFileService = profileFileService;
         _captureFileReader = captureFileReader;
+        _updateService = updateService;
         _bleDiscovery = bleDiscovery;
         _bleGattBrowser = bleGattBrowser;
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -208,6 +213,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public event Action<int>? RecordsAppended;
     public event Action<double>? ChartValueAdded;
     public event Action<QuickCommandItemViewModel>? QuickCommandAdded;
+    public event Action<UpdateCheckResult>? UpdateAvailable;
 
     [ObservableProperty]
     private DeviceProfile? selectedProfile;
@@ -300,6 +306,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private bool isBusy;
 
     [ObservableProperty]
+    private string gitHubRepository = string.Empty;
+
+    [ObservableProperty]
+    private bool autoUpdateEnabled = true;
+
+    [ObservableProperty]
+    private bool isUpdateBusy;
+
+    [ObservableProperty]
+    private string updateStatusText = "未检查";
+
+    [ObservableProperty]
     private bool isConnected;
 
     [ObservableProperty]
@@ -316,6 +334,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     [ObservableProperty]
     private string sendText = string.Empty;
+
+    [ObservableProperty]
+    private bool isSendRepeating;
+
+    [ObservableProperty]
+    private bool sendRepeatEnabled;
+
+    [ObservableProperty]
+    private int sendRepeatIntervalMs = 1000;
 
     [ObservableProperty]
     private bool sendAsHex;
@@ -454,6 +481,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         ProfileDirectory = _profileStore.DirectoryPath;
         ApplyTerminalDisplaySettings(settings);
+        GitHubRepository = string.IsNullOrWhiteSpace(settings.GitHubRepository)
+            ? AppSettings.DefaultGitHubRepository
+            : settings.GitHubRepository.Trim();
+        AutoUpdateEnabled = settings.AutoUpdateEnabled;
         UpdateAvailableTransportOptions();
         await ReloadProfilesAsync(settings.SelectedProfileId).ConfigureAwait(true);
         if (Profiles.Count == 0)
@@ -478,6 +509,90 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             await ReloadProfilesAsync(profile.Id).ConfigureAwait(true);
         }
         StartPortRefreshInBackground();
+        _ = CheckForUpdatesInBackgroundAsync();
+    }
+
+    public async Task<UpdateCheckResult?> CheckForUpdatesAsync()
+    {
+        if (IsUpdateBusy)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(GitHubRepository))
+        {
+            UpdateStatusText = "未配置 GitHub 仓库";
+            return null;
+        }
+
+        IsUpdateBusy = true;
+        UpdateStatusText = "正在检查 GitHub 更新…";
+        try
+        {
+            UpdateCheckResult result = await _updateService
+                .CheckGitHubAsync(GitHubRepository)
+                .ConfigureAwait(true);
+            UpdateStatusText = result.IsUpdateAvailable
+                ? $"发现新版本 {result.LatestVersion}"
+                : $"当前已是最新版本 {result.CurrentVersion}";
+            return result;
+        }
+        catch (Exception exception)
+        {
+            UpdateStatusText = $"检查更新失败：{exception.Message}";
+            return null;
+        }
+        finally
+        {
+            IsUpdateBusy = false;
+        }
+    }
+
+    public async Task<bool> DownloadAndApplyUpdateAsync(UpdateCheckResult result)
+    {
+        if (!result.IsUpdateAvailable || IsUpdateBusy)
+        {
+            return false;
+        }
+
+        IsUpdateBusy = true;
+        try
+        {
+            UpdateStatusText = $"正在下载 {result.LatestVersion}…";
+            Progress<double> progress = new(value =>
+            {
+                UpdateStatusText = $"正在下载 {result.LatestVersion}：{value:P0}";
+            });
+            string packagePath = await _updateService
+                .DownloadAsync(result.Manifest, progress)
+                .ConfigureAwait(true);
+            _updateService.StartInstaller(packagePath);
+            UpdateStatusText = "更新已准备，程序即将重启";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            UpdateStatusText = $"更新失败：{exception.Message}";
+            return false;
+        }
+        finally
+        {
+            IsUpdateBusy = false;
+        }
+    }
+
+    private async Task CheckForUpdatesInBackgroundAsync()
+    {
+        if (!AutoUpdateEnabled || string.IsNullOrWhiteSpace(GitHubRepository))
+        {
+            return;
+        }
+
+        UpdateCheckResult? result = await CheckForUpdatesAsync().ConfigureAwait(true);
+        if (result?.IsUpdateAvailable == true)
+        {
+            UpdateAvailable?.Invoke(result);
+        }
     }
 
     public async Task ImportLegacyAsync(string directory)
@@ -743,6 +858,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _manualDisconnect = !_connectionDesired;
         if (!_connectionDesired)
         {
+            SendRepeatEnabled = false;
+            StopSendRepeat();
             _connectionAttemptCancellation?.Cancel();
             IsConnected = false;
         }
@@ -772,6 +889,85 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         finally
         {
             RefreshSendCommandAvailability();
+        }
+    }
+
+    private void UpdateSendRepeatState()
+    {
+        if (!SendRepeatEnabled || !CanSend)
+        {
+            StopSendRepeat();
+            return;
+        }
+
+        if (_sendRepeatCancellation is null)
+        {
+            _ = RunSendRepeatAsync();
+        }
+    }
+
+    private async Task RunSendRepeatAsync()
+    {
+        if (_sendRepeatCancellation is not null || !SendRepeatEnabled || !CanSend)
+        {
+            return;
+        }
+
+        CancellationTokenSource source = new();
+        CancellationToken cancellationToken = source.Token;
+        _sendRepeatCancellation = source;
+        IsSendRepeating = true;
+        StatusText = $"已开始循环发送，间隔 {Math.Clamp(SendRepeatIntervalMs, 1, 60_000)} ms";
+
+        bool failed = false;
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested && SendRepeatEnabled && CanSend)
+            {
+                bool sent = await SendPayloadAsync(
+                    SendText,
+                    SendAsHex,
+                    SelectedLineEnding,
+                    SelectedSendChecksum,
+                    ChecksumLittleEndian,
+                    updateStatus: false).ConfigureAwait(true);
+                if (!sent)
+                {
+                    failed = true;
+                    SendRepeatEnabled = false;
+                    break;
+                }
+
+                int interval = Math.Clamp(SendRepeatIntervalMs, 1, 60_000);
+                await Task.Delay(interval, cancellationToken).ConfigureAwait(true);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            bool wasCanceled = cancellationToken.IsCancellationRequested;
+            if (ReferenceEquals(_sendRepeatCancellation, source))
+            {
+                _sendRepeatCancellation = null;
+                IsSendRepeating = false;
+            }
+
+            source.Dispose();
+            if (wasCanceled && !failed && !SendRepeatEnabled)
+            {
+                StatusText = "已停止循环发送";
+            }
+            else if (!failed && !SendRepeatEnabled)
+            {
+                StatusText = "循环发送已停止";
+            }
+
+            if (SendRepeatEnabled && CanSend && !failed)
+            {
+                UpdateSendRepeatState();
+            }
         }
     }
 
@@ -1092,6 +1288,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private void StopSendRepeat()
+    {
+        if (_sendRepeatCancellation is { } source)
+        {
+            CancelWithoutThrow(source);
+        }
+    }
+
     private QuickCommandItemViewModel? FindQuickCommand(QuickCommandVariableSetItemViewModel variableSet) =>
         QuickCommands.FirstOrDefault(command => command.VariableSets.Contains(variableSet));
 
@@ -1236,6 +1440,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _uiTimer.Stop();
         _profileSaveTimer.Stop();
         _appSettingsSaveTimer.Stop();
+        StopSendRepeat();
         CancellationTokenSource[] repeatSources = _repeatCommands.Values.ToArray();
         _repeatCommands.Clear();
         foreach (CancellationTokenSource source in repeatSources)
@@ -1429,6 +1634,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _appSettingsSaveTimer.Start();
     }
 
+    public void ResetOnlineUpdateSettings()
+    {
+        GitHubRepository = AppSettings.DefaultGitHubRepository;
+        AutoUpdateEnabled = true;
+        UpdateStatusText = "未检查";
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
     private static void LoadTerminalPalette(
         ObservableCollection<ColorPaletteItem> target,
         IReadOnlyList<string>? savedColors,
@@ -1446,6 +1660,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnSelectedWorkspaceModeChanged(WorkspaceModeOption value)
     {
+        SendRepeatEnabled = false;
+        StopSendRepeat();
         if (_connectedWorkspaceMode is not null && _connectedWorkspaceMode != value.Mode)
         {
             _connectionDesired = false;
@@ -1485,10 +1701,23 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnProfileNameChanged(string value) => ScheduleProfileSave();
 
+    partial void OnGitHubRepositoryChanged(string value)
+    {
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
+    partial void OnAutoUpdateEnabledChanged(bool value)
+    {
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
     partial void OnSendTextChanged(string value)
     {
         OnPropertyChanged(nameof(CanSend));
-        SendCommand.NotifyCanExecuteChanged();
+        RefreshSendCommandAvailability();
+        UpdateSendRepeatState();
     }
 
     partial void OnSendAsHexChanged(bool value)
@@ -1552,6 +1781,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     partial void OnPortNameChanged(string value) => OnPropertyChanged(nameof(ConnectionSummary));
     partial void OnBaudRateChanged(int value) => OnPropertyChanged(nameof(ConnectionSummary));
     partial void OnReceiveTimeoutMsChanged(int value) => ScheduleProfileSave();
+    partial void OnSendRepeatEnabledChanged(bool value) => UpdateSendRepeatState();
+    partial void OnSendRepeatIntervalMsChanged(int value)
+    {
+        int normalized = Math.Clamp(value, 1, 60_000);
+        if (value != normalized)
+        {
+            SendRepeatIntervalMs = normalized;
+            return;
+        }
+
+        ScheduleProfileSave();
+    }
     partial void OnHostChanged(string value) => OnPropertyChanged(nameof(ConnectionSummary));
     partial void OnRemotePortChanged(int value) => OnPropertyChanged(nameof(ConnectionSummary));
     partial void OnLocalAddressChanged(string value) => OnPropertyChanged(nameof(ConnectionSummary));
@@ -1567,6 +1808,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(ConnectionButtonText));
         OnPropertyChanged(nameof(CanSend));
         RefreshSendCommandAvailability();
+        UpdateSendRepeatState();
     }
 
     private void RefreshSendCommandAvailability()
@@ -1842,7 +2084,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         bool littleEndian,
         Encoding? textEncoding = null,
         string? formatLabel = null,
-        IReadOnlyDictionary<string, string>? variables = null)
+        IReadOnlyDictionary<string, string>? variables = null,
+        bool updateStatus = true)
     {
         try
         {
@@ -1867,7 +2110,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             }
             CommunicationSession session = _session ?? throw new InvalidOperationException("请先建立连接。 ");
             await session.SendAsync(final, sentAsHex: isHex).ConfigureAwait(true);
-            StatusText = $"已发送 {final.Length} 字节（{formatLabel ?? (isHex ? "HEX 输入" : "文本输入")}）";
+            if (updateStatus)
+            {
+                StatusText = $"已发送 {final.Length} 字节（{formatLabel ?? (isHex ? "HEX 输入" : "文本输入")}）";
+            }
             return true;
         }
         catch (OperationCanceledException)
@@ -2293,6 +2539,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private void LoadProfile(DeviceProfile profile)
     {
+        SendRepeatEnabled = false;
+        StopSendRepeat();
         bool previousSuppression = _suppressProfileSelection;
         _suppressProfileSelection = true;
         try
@@ -2349,6 +2597,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             SelectedQuickCommandDataFormat = NormalizeQuickCommandDataFormat(profile.Terminal.QuickCommandDataFormat);
             SendAsHex = profile.Terminal.SendAsHex;
             ReceiveAsHex = profile.Terminal.ReceiveAsHex;
+            SendRepeatIntervalMs = Math.Clamp(profile.Terminal.SendRepeatIntervalMs, 1, 60_000);
             ReceiveTimeoutMs = Math.Clamp(profile.Terminal.ReceiveTimeoutMs, 1, 5000);
             SelectedLineEnding = profile.Terminal.LineEnding;
             List<QuickCommandItemViewModel> quickCommands = [];
@@ -2407,6 +2656,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             ReceiveAsHex = ReceiveAsHex,
             ShowTimestamp = true,
             LineEnding = SelectedLineEnding,
+            SendRepeatIntervalMs = Math.Clamp(SendRepeatIntervalMs, 1, 60_000),
             ReceiveTimeoutMs = Math.Clamp(ReceiveTimeoutMs, 1, 5000),
             UiRecordLimit = _activeProfile?.Terminal.UiRecordLimit ?? 100_000
         },
@@ -2551,6 +2801,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 TerminalContentColumnWidth = TerminalContentColumnWidth,
                 TerminalTextColor = App.NormalizeTerminalColor(TerminalTextColor, App.DefaultTerminalTextColor),
                 TerminalBackgroundColor = App.NormalizeTerminalColor(TerminalBackgroundColor, App.DefaultTerminalBackgroundColor),
+                GitHubRepository = GitHubRepository.Trim(),
+                AutoUpdateEnabled = AutoUpdateEnabled,
                 TerminalTextPalette = TerminalTextPalette.Select(item => item.Color).ToList(),
                 TerminalBackgroundPalette = TerminalBackgroundPalette.Select(item => item.Color).ToList()
             }).ConfigureAwait(false);

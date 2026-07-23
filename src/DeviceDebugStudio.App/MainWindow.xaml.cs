@@ -14,6 +14,7 @@ using DeviceDebugStudio.App.ViewModels;
 using DeviceDebugStudio.Core.Transports;
 using DeviceDebugStudio.Infrastructure.Persistence;
 using DeviceDebugStudio.Infrastructure.Transports;
+using DeviceDebugStudio.Infrastructure.Updates;
 using Microsoft.Win32;
 using ScottPlot.Plottables;
 using Wpf.Ui.Appearance;
@@ -56,6 +57,7 @@ public partial class MainWindow : Window
     private int? _quickCommandDropInsertionIndex;
     private bool _terminalColumnDragActive;
     private double _terminalViewportWidth;
+    private bool _updatePromptVisible;
 
     private enum SidebarFocus
     {
@@ -102,6 +104,7 @@ public partial class MainWindow : Window
         _viewModel.TerminalRecords.CollectionChanged += OnTerminalRecordsCollectionChanged;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _viewModel.QuickCommandAdded += OnQuickCommandAdded;
+        _viewModel.UpdateAvailable += OnUpdateAvailable;
         UpdateTerminalColumnWidths();
     }
 
@@ -115,6 +118,7 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _viewModel.QuickCommandAdded -= OnQuickCommandAdded;
+        _viewModel.UpdateAvailable -= OnUpdateAvailable;
         _windowSource?.RemoveHook(OnWindowMessage);
         _windowSource = null;
         base.OnClosed(e);
@@ -1070,7 +1074,7 @@ public partial class MainWindow : Window
     private void OnOpenTerminalMoreMenuClick(object sender, RoutedEventArgs e)
     {
         TerminalMoreMenu.PlacementTarget = TerminalMoreButton;
-        TerminalMoreMenu.Placement = PlacementMode.Bottom;
+        TerminalMoreMenu.Placement = PlacementMode.Right;
         TerminalMoreMenu.IsOpen = true;
     }
 
@@ -1119,6 +1123,86 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) == true)
         {
             await _viewModel.OpenCaptureAsync(dialog.FileName);
+        }
+    }
+
+    private async void OnCheckForUpdatesClick(object sender, RoutedEventArgs e)
+    {
+        UpdateCheckResult? result = await _viewModel.CheckForUpdatesAsync();
+        if (result is null)
+        {
+            MessageBox.Show(this, _viewModel.UpdateStatusText, "检查更新", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (!result.IsUpdateAvailable)
+        {
+            MessageBox.Show(
+                this,
+                $"当前版本 {result.CurrentVersion} 已是最新版本。",
+                "检查更新",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        await PromptForUpdateAsync(result);
+    }
+
+    private void OnUpdateAvailable(UpdateCheckResult result)
+    {
+        if (_closing)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() => _ = PromptForUpdateAsync(result)));
+    }
+
+    private async Task PromptForUpdateAsync(UpdateCheckResult result)
+    {
+        if (_updatePromptVisible || !result.IsUpdateAvailable)
+        {
+            return;
+        }
+
+        _updatePromptVisible = true;
+        try
+        {
+            string notes = string.IsNullOrWhiteSpace(result.Manifest.ReleaseNotes)
+                ? "发布说明未提供。"
+                : result.Manifest.ReleaseNotes.Trim();
+            if (notes.Length > 1200)
+            {
+                notes = notes[..1200] + "…";
+            }
+
+            MessageBoxResult choice = MessageBox.Show(
+                this,
+                $"发现 GitHub 新版本 {result.LatestVersion}。\n\n{notes}\n\n现在下载并重启更新吗？",
+                "发现更新",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information,
+                MessageBoxResult.Yes);
+            if (choice != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            bool started = await _viewModel.DownloadAndApplyUpdateAsync(result);
+            if (started)
+            {
+                MessageBox.Show(this, "更新包已校验，程序将关闭并自动重启。", "更新", MessageBoxButton.OK, MessageBoxImage.Information);
+                Application.Current.Shutdown();
+            }
+            else
+            {
+                MessageBox.Show(this, _viewModel.UpdateStatusText, "更新失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        finally
+        {
+            _updatePromptVisible = false;
         }
     }
 

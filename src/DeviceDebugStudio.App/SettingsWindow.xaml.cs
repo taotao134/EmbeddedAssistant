@@ -14,6 +14,7 @@ namespace DeviceDebugStudio.App;
 public partial class SettingsWindow : Window
 {
     private readonly MainWindowViewModel _viewModel;
+    private string _selectedPage = "TerminalDisplay";
 
     public SettingsWindow(MainWindowViewModel viewModel)
     {
@@ -24,15 +25,27 @@ public partial class SettingsWindow : Window
 
     private void OnNavigationSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
-        if (TerminalDisplayPage is not null && e.NewValue is TreeViewItem { Tag: "TerminalDisplay" })
+        if (e.NewValue is not TreeViewItem { Tag: string page }
+            || TerminalDisplayPage is null
+            || OnlineUpdatePage is null)
         {
-            TerminalDisplayPage.Visibility = Visibility.Visible;
+            return;
         }
+
+        _selectedPage = page;
+        TerminalDisplayPage.Visibility = page == "TerminalDisplay" ? Visibility.Visible : Visibility.Collapsed;
+        OnlineUpdatePage.Visibility = page == "OnlineUpdate" ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnAppearanceCategoryPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         AppearanceCategory.IsExpanded = !AppearanceCategory.IsExpanded;
+        e.Handled = true;
+    }
+
+    private void OnOnlineUpdateCategoryPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        OnlineUpdateCategory.IsExpanded = !OnlineUpdateCategory.IsExpanded;
         e.Handled = true;
     }
 
@@ -138,6 +151,12 @@ public partial class SettingsWindow : Window
 
     private void OnResetClick(object sender, RoutedEventArgs e)
     {
+        if (_selectedPage == "OnlineUpdate")
+        {
+            _viewModel.ResetOnlineUpdateSettings();
+            return;
+        }
+
         _viewModel.ResetTerminalDisplaySettings();
     }
 

@@ -18,7 +18,9 @@ public sealed class ProfileAndImportTests
             TerminalDirectionColumnWidth = 54,
             TerminalEndpointColumnWidth = 184,
             TerminalSizeColumnWidth = 72,
-            TerminalContentColumnWidth = 640
+            TerminalContentColumnWidth = 640,
+            GitHubRepository = "acme/device-debug-studio",
+            AutoUpdateEnabled = false
         };
 
         string json = JsonSerializer.Serialize(settings);
@@ -29,10 +31,14 @@ public sealed class ProfileAndImportTests
         Assert.Equal(184, loaded.TerminalEndpointColumnWidth);
         Assert.Equal(72, loaded.TerminalSizeColumnWidth);
         Assert.Equal(640, loaded.TerminalContentColumnWidth);
+        Assert.Equal("acme/device-debug-studio", loaded.GitHubRepository);
+        Assert.False(loaded.AutoUpdateEnabled);
 
         AppSettings defaults = Assert.IsType<AppSettings>(JsonSerializer.Deserialize<AppSettings>("{}"));
         Assert.Equal(AppSettings.DefaultTerminalTimeColumnWidth, defaults.TerminalTimeColumnWidth);
         Assert.Equal(AppSettings.DefaultTerminalContentColumnWidth, defaults.TerminalContentColumnWidth);
+        Assert.Equal(AppSettings.DefaultGitHubRepository, defaults.GitHubRepository);
+        Assert.True(defaults.AutoUpdateEnabled);
     }
 
     [Fact]
@@ -65,7 +71,11 @@ public sealed class ProfileAndImportTests
                 Name = "回归设备",
                 WorkspaceMode = WorkspaceMode.Bluetooth,
                 Transport = new BleGattTransportSettings(),
-                Terminal = new TerminalPreferences { QuickCommandDataFormat = "ASCII" },
+                Terminal = new TerminalPreferences
+                {
+                    QuickCommandDataFormat = "ASCII",
+                    SendRepeatIntervalMs = 250
+                },
                 CommandGroups =
                 [
                     new QuickCommandGroup
@@ -95,6 +105,7 @@ public sealed class ProfileAndImportTests
             Assert.Equal(WorkspaceMode.Bluetooth, loaded.WorkspaceMode);
             Assert.IsType<BleGattTransportSettings>(loaded.Transport);
             Assert.Equal("ASCII", loaded.Terminal.QuickCommandDataFormat);
+            Assert.Equal(250, loaded.Terminal.SendRepeatIntervalMs);
             Assert.Equal("查询", loaded.CommandGroups[0].Commands[0].Name);
             Assert.Equal(12, loaded.CommandGroups[0].Commands[0].UsageCount);
             Assert.Equal(96, loaded.CommandGroups[0].Commands[0].NameColumnWeight);

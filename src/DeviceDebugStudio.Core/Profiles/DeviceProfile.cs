@@ -36,6 +36,7 @@ public sealed record TerminalPreferences
     public bool ReceiveAsHex { get; init; }
     public bool ShowTimestamp { get; init; } = true;
     public string LineEnding { get; init; } = "None";
+    public int SendRepeatIntervalMs { get; init; } = 1000;
     public int ReceiveTimeoutMs { get; init; } = 20;
     public int UiRecordLimit { get; init; } = 100_000;
 }
