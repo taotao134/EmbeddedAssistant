@@ -198,6 +198,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         "05 写单线圈", "06 写单寄存器", "0F 写多线圈", "10 写多寄存器"
     ];
 
+    public string ApplicationVersionText => $"v{_updateService.CurrentVersion.ToString(3)}";
+
     public ObservableCollection<DeviceProfile> Profiles { get; } = [];
     public ObservableCollection<SerialPortInfo> SerialPorts { get; } = [];
     public ObservableCollection<BleDeviceInfo> BleDevices { get; } = [];
@@ -1083,13 +1085,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             variableSet.Variables.Add(new QuickCommandVariableItemViewModel(
                 new QuickCommandVariable { Name = string.Empty }));
-            variableSet.Variables.Add(new QuickCommandVariableItemViewModel(
-                new QuickCommandVariable { Name = string.Empty }));
-        }
-        else if (variableSet.Variables.Count % 2 != 0)
-        {
-            variableSet.Variables.Add(new QuickCommandVariableItemViewModel(
-                new QuickCommandVariable { Name = string.Empty }));
         }
         command.VariableSets.Add(variableSet);
         command.SelectedVariableSet = variableSet;
@@ -1152,21 +1147,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         HashSet<string> existing = variableSet.Variables
             .Select(variable => variable.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        for (int added = 0; added < 2; added++)
+        int sequence = 1;
+        while (existing.Contains($"var{sequence}"))
         {
-            int sequence = 1;
-            while (existing.Contains($"var{sequence}"))
-            {
-                sequence++;
-            }
-
-            string variableName = $"var{sequence}";
-            existing.Add(variableName);
-            variableSet.Variables.Add(new QuickCommandVariableItemViewModel(new QuickCommandVariable
-            {
-                Name = variableName
-            }));
+            sequence++;
         }
+
+        variableSet.Variables.Add(new QuickCommandVariableItemViewModel(new QuickCommandVariable
+        {
+            Name = $"var{sequence}"
+        }));
         ScheduleProfileSave();
     }
 
@@ -1185,19 +1175,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             return;
         }
-        int index = variableSet.Variables.IndexOf(variable);
-        if (index < 0)
+        if (variableSet.Variables.Remove(variable))
         {
-            return;
+            ScheduleProfileSave();
         }
-
-        int rowStart = index - index % 2;
-        int rowCount = Math.Min(2, variableSet.Variables.Count - rowStart);
-        for (int rowIndex = 0; rowIndex < rowCount; rowIndex++)
-        {
-            variableSet.Variables.RemoveAt(rowStart);
-        }
-        ScheduleProfileSave();
     }
 
     [RelayCommand]

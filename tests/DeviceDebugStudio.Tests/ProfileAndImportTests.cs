@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using DeviceDebugStudio.App.ViewModels;
 using DeviceDebugStudio.Core.Profiles;
 using DeviceDebugStudio.Core.Transports;
 using DeviceDebugStudio.Infrastructure.Import;
@@ -157,6 +158,46 @@ public sealed class ProfileAndImportTests
         {
             Directory.Delete(directory, true);
         }
+    }
+
+    [Fact]
+    public async Task ImportsSscomCommandPayloadWithEnglishCommas()
+    {
+        string directory = CreateTemporaryDirectory();
+        try
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            string path = Path.Combine(directory, "sscom51.ini");
+            await File.WriteAllTextAsync(
+                path,
+                "N20=A,$SETIP,192,168,0,10\r\nN120=0,设置 IP,1000\r\nN1057=Y\r\nN1080=COM3\r\nN1081=115200\r\n",
+                Encoding.GetEncoding(936));
+
+            LegacyImportResult result = await new LegacyConfigImporter().ImportFilesAsync([path]);
+
+            QuickCommand command = Assert.Single(Assert.Single(result.Profiles).CommandGroups[0].Commands);
+            Assert.Equal("$SETIP,192,168,0,10", command.Payload);
+            Assert.Equal("$SETIP,192,168,0,10", command.Template);
+            Assert.Equal("设置 IP", command.Name);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public void EditingQuickCommandPayloadUpdatesSentTemplate()
+    {
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Payload = "$SETIP19216811"
+        });
+
+        command.Payload = "$SETIP,192,168,0,10";
+
+        Assert.Equal(command.Payload, command.Template);
+        Assert.Equal(command.Payload, command.TemplateOrPayload);
     }
 
     [Fact]

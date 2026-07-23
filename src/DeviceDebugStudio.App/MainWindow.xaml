@@ -123,6 +123,19 @@
                                FontWeight="Normal"
                                Foreground="{DynamicResource ButtonForegroundBrush}"
                                Text="嵌入式调试台" />
+                    <Border Margin="7,0,0,0"
+                            Padding="6,2"
+                            VerticalAlignment="Center"
+                            Background="{DynamicResource SidebarBackgroundBrush}"
+                            BorderBrush="{DynamicResource DividerBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            ToolTip="当前软件版本">
+                        <TextBlock VerticalAlignment="Center"
+                                   FontSize="10"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   Text="{Binding ApplicationVersionText}" />
+                    </Border>
                     <Border Margin="10,0,0,0"
                             Padding="7,3"
                             VerticalAlignment="Center"
@@ -1476,8 +1489,6 @@
                                                                                 <TextBox.Style>
                                                                                     <Style TargetType="TextBox" BasedOn="{StaticResource ConnectionTextBoxStyle}">
                                                                                         <Setter Property="Visibility" Value="Collapsed" />
-                                                                                        <Setter Property="Background" Value="Transparent" />
-                                                                                        <Setter Property="BorderThickness" Value="0" />
                                                                                         <Setter Property="SelectionBrush" Value="{DynamicResource AccentSoftBrush}" />
                                                                                         <Style.Triggers>
                                                                                             <DataTrigger Binding="{Binding IsRenaming}" Value="True">

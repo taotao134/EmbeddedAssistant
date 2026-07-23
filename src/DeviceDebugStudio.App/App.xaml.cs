@@ -123,6 +123,10 @@ public partial class App : Application
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#2400A896" : "#0F00796B"));
         Current.Resources["AccentSoftBrush"] = new System.Windows.Media.SolidColorBrush(
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#3D00A896" : "#2400796B"));
+        Current.Resources["NavigationHoverBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#303734" : "#E1E5E2"));
+        Current.Resources["NavigationSelectedBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#3A433E" : "#D3D8D5"));
         Current.Resources["ButtonSurfaceBrush"] = new System.Windows.Media.SolidColorBrush(
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#2A2F2C" : "#FFFFFF"));
         Current.Resources["ButtonForegroundBrush"] = new System.Windows.Media.SolidColorBrush(

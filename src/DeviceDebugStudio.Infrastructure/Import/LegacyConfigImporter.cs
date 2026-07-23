@@ -107,13 +107,12 @@ public sealed class LegacyConfigImporter
         List<QuickCommand> commands = [];
         for (int index = 1; index <= 100; index++)
         {
-            if (!values.TryGetValue(index, out string? commandValue) || commandValue.Length < 2 || commandValue[1] != ',')
+            if (!values.TryGetValue(index, out string? commandValue)
+                || !TryParseSscomCommand(commandValue, out char mode, out string payload))
             {
                 continue;
             }
 
-            char mode = commandValue[0];
-            string payload = commandValue[2..];
             if (string.IsNullOrWhiteSpace(payload))
             {
                 continue;
@@ -140,6 +139,7 @@ public sealed class LegacyConfigImporter
             {
                 Name = label,
                 Payload = payload,
+                Template = payload,
                 IsHex = char.ToUpperInvariant(mode) == 'H',
                 LineEnding = lineEnding,
                 Checksum = checksum,
@@ -245,6 +245,21 @@ public sealed class LegacyConfigImporter
             }
         }
         return values;
+    }
+
+    private static bool TryParseSscomCommand(string value, out char mode, out string payload)
+    {
+        mode = default;
+        payload = string.Empty;
+        int separator = value.IndexOf(',');
+        if (separator <= 0)
+        {
+            return false;
+        }
+
+        mode = value[0];
+        payload = value[(separator + 1)..];
+        return true;
     }
 
     private static TransportSettings BuildSscomTransport(IReadOnlyDictionary<int, string> values)

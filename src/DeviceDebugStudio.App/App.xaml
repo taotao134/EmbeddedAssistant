@@ -19,6 +19,8 @@
             <SolidColorBrush x:Key="AccentHoverBrush" Color="#000000" />
             <SolidColorBrush x:Key="AccentSubtleBrush" Color="#10000000" />
             <SolidColorBrush x:Key="AccentSoftBrush" Color="#22000000" />
+            <SolidColorBrush x:Key="NavigationHoverBrush" Color="#E1E5E2" />
+            <SolidColorBrush x:Key="NavigationSelectedBrush" Color="#D3D8D5" />
             <SolidColorBrush x:Key="MutedTextBrush" Color="#555555" />
             <SolidColorBrush x:Key="TerminalBackgroundBrush" Color="#141817" />
             <SolidColorBrush x:Key="TerminalTextBrush" Color="#E6EBE8" />

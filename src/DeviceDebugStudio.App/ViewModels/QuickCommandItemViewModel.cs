@@ -18,6 +18,9 @@ public partial class QuickCommandItemViewModel : ObservableObject
         name = command.Name;
         payload = command.Payload;
         template = string.IsNullOrEmpty(command.Template) ? command.Payload : command.Template;
+        _payloadAndTemplateLinked = string.IsNullOrEmpty(command.Template)
+            || (!VariableRegex.IsMatch(command.Template)
+                && string.Equals(command.Template, command.Payload, StringComparison.Ordinal));
         isHex = command.IsHex;
         lineEnding = command.LineEnding;
         checksum = command.Checksum;
@@ -48,15 +51,6 @@ public partial class QuickCommandItemViewModel : ObservableObject
         selectedVariableSet = VariableSets.FirstOrDefault(item => item.Id == command.SelectedVariableSetId)
             ?? VariableSets.FirstOrDefault();
         SynchronizeTemplateVariables();
-        if (selectedVariableSet is not null && selectedVariableSet.Variables.Count == 0)
-        {
-            selectedVariableSet.Variables.Add(CreateEmptyVariable());
-            selectedVariableSet.Variables.Add(CreateEmptyVariable());
-        }
-        else if (selectedVariableSet is not null && selectedVariableSet.Variables.Count % 2 != 0)
-        {
-            selectedVariableSet.Variables.Add(CreateEmptyVariable());
-        }
     }
 
     public Guid Id { get; }
@@ -120,10 +114,12 @@ public partial class QuickCommandItemViewModel : ObservableObject
     [ObservableProperty]
     private bool isExpanded;
 
+    private bool _payloadAndTemplateLinked;
+
     public string UsageText => UsageCount == 0 ? "未使用" : $"使用 {UsageCount} 次";
     public string UsageShortText => UsageCount > 999 ? "999+" : UsageCount.ToString();
     public string VariableSetCountText => $"{VariableSets.Count} 套方案";
-    public string TemplateOrPayload => string.IsNullOrEmpty(Template) ? Payload : Template;
+    public string TemplateOrPayload => _payloadAndTemplateLinked ? Payload : Template;
     public string ResolvedPayload => ByteText.ExpandVariables(TemplateOrPayload, SelectedVariableSet?.GetValues() ?? EmptyVariables);
     public bool HasTemplateVariables => GetTemplateVariableNames().Count > 0;
     public bool IsDirectPayloadMode => !HasTemplateVariables;
@@ -214,12 +210,30 @@ public partial class QuickCommandItemViewModel : ObservableObject
 
     partial void OnPayloadChanged(string value)
     {
+        if (_payloadAndTemplateLinked && !string.Equals(template, value, StringComparison.Ordinal))
+        {
+            template = value;
+            OnPropertyChanged(nameof(Template));
+        }
         OnPropertyChanged(nameof(TemplateOrPayload));
         NotifyVariablePresentationChanged();
     }
 
     partial void OnTemplateChanged(string value)
     {
+        if (VariableRegex.IsMatch(value))
+        {
+            _payloadAndTemplateLinked = false;
+        }
+        else
+        {
+            _payloadAndTemplateLinked = true;
+            if (!string.Equals(payload, value, StringComparison.Ordinal))
+            {
+                payload = value;
+                OnPropertyChanged(nameof(Payload));
+            }
+        }
         OnPropertyChanged(nameof(TemplateOrPayload));
         SynchronizeTemplateVariables();
     }
@@ -257,9 +271,6 @@ public partial class QuickCommandItemViewModel : ObservableObject
     private static readonly Regex VariableRegex = new(
         @"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private static QuickCommandVariableItemViewModel CreateEmptyVariable() =>
-        new(new QuickCommandVariable { Name = string.Empty });
 
     private static GridLength CreateStarWidth(double value, double fallback) =>
         new(double.IsFinite(value) && value > 0 ? value : fallback, GridUnitType.Star);

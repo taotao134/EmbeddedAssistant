@@ -17,6 +17,74 @@
             <Setter Property="Padding" Value="0" />
             <Setter Property="BorderThickness" Value="1" />
         </Style>
+        <Style x:Key="SettingsNavigationCategoryStyle" TargetType="ToggleButton">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundBrush}" />
+            <Setter Property="Padding" Value="8,7" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="CategoryBackground"
+                                Background="Transparent"
+                                CornerRadius="4">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="20" />
+                                </Grid.ColumnDefinitions>
+                                <ContentPresenter Margin="{TemplateBinding Padding}"
+                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="Center" />
+                                <ui:SymbolIcon x:Name="CategoryChevron"
+                                               Grid.Column="1"
+                                               Width="14"
+                                               Height="14"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Foreground="{TemplateBinding Foreground}"
+                                               Symbol="ChevronDown20" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="CategoryBackground" Property="Background" Value="{DynamicResource NavigationHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="False">
+                                <Setter TargetName="CategoryChevron" Property="Symbol" Value="ChevronRight20" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="SettingsNavigationPageStyle" TargetType="RadioButton">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundBrush}" />
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="PageBackground"
+                                Background="Transparent"
+                                CornerRadius="4">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="PageBackground" Property="Background" Value="{DynamicResource NavigationHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="PageBackground" Property="Background" Value="{DynamicResource NavigationSelectedBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid Background="{DynamicResource WorkspaceBackgroundBrush}">
@@ -39,30 +107,46 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <TextBlock Margin="8,0,0,14" FontSize="18" FontWeight="SemiBold" Text="设置" />
-                <TreeView x:Name="SettingsNavigation"
-                          Grid.Row="1"
-                          BorderThickness="0"
-                          Background="Transparent"
-                          SelectedItemChanged="OnNavigationSelectedItemChanged">
-                    <TreeViewItem x:Name="AppearanceCategory" IsExpanded="True">
-                        <TreeViewItem.Header>
-                            <StackPanel Width="138" Background="Transparent" Orientation="Horizontal" PreviewMouseLeftButtonDown="OnAppearanceCategoryPreviewMouseLeftButtonDown">
-                                <ui:SymbolIcon Margin="0,0,7,0" Symbol="Color20" />
-                                <TextBlock FontWeight="SemiBold" Text="外观" />
-                            </StackPanel>
-                        </TreeViewItem.Header>
-                        <TreeViewItem Header="终端显示" Tag="TerminalDisplay" IsSelected="True" />
-                    </TreeViewItem>
-                    <TreeViewItem x:Name="OnlineUpdateCategory" IsExpanded="True">
-                        <TreeViewItem.Header>
-                            <StackPanel Width="138" Background="Transparent" Orientation="Horizontal" PreviewMouseLeftButtonDown="OnOnlineUpdateCategoryPreviewMouseLeftButtonDown">
-                                <ui:SymbolIcon Margin="0,0,7,0" Symbol="ArrowSync20" />
-                                <TextBlock FontWeight="SemiBold" Text="在线更新" />
-                            </StackPanel>
-                        </TreeViewItem.Header>
-                        <TreeViewItem Header="GitHub 更新" Tag="OnlineUpdate" />
-                    </TreeViewItem>
-                </TreeView>
+                <StackPanel x:Name="SettingsNavigation" Grid.Row="1">
+                    <ToggleButton x:Name="AppearanceCategoryToggle"
+                                  IsChecked="True"
+                                  Style="{StaticResource SettingsNavigationCategoryStyle}"
+                                  ToolTip="展开或收起外观设置">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Margin="0,0,7,0" Symbol="Color20" />
+                            <TextBlock Text="外观" />
+                        </StackPanel>
+                    </ToggleButton>
+                    <StackPanel Margin="12,0,0,2"
+                                Visibility="{Binding IsChecked, ElementName=AppearanceCategoryToggle, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <RadioButton GroupName="SettingsNavigation"
+                                     IsChecked="True"
+                                     Style="{StaticResource SettingsNavigationPageStyle}"
+                                     Tag="TerminalDisplay"
+                                     Checked="OnNavigationPageChecked">
+                            <TextBlock Text="终端显示" />
+                        </RadioButton>
+                    </StackPanel>
+
+                    <ToggleButton x:Name="OnlineUpdateCategoryToggle"
+                                  IsChecked="True"
+                                  Style="{StaticResource SettingsNavigationCategoryStyle}"
+                                  ToolTip="展开或收起在线更新设置">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Margin="0,0,7,0" Symbol="ArrowSync20" />
+                            <TextBlock Text="在线更新" />
+                        </StackPanel>
+                    </ToggleButton>
+                    <StackPanel Margin="12,0,0,0"
+                                Visibility="{Binding IsChecked, ElementName=OnlineUpdateCategoryToggle, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <RadioButton GroupName="SettingsNavigation"
+                                     Style="{StaticResource SettingsNavigationPageStyle}"
+                                     Tag="OnlineUpdate"
+                                     Checked="OnNavigationPageChecked">
+                            <TextBlock Text="GitHub 更新" />
+                        </RadioButton>
+                    </StackPanel>
+                </StackPanel>
             </Grid>
         </Border>
 

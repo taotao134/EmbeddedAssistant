@@ -106,6 +106,48 @@ public partial class MainWindow : Window
         _viewModel.QuickCommandAdded += OnQuickCommandAdded;
         _viewModel.UpdateAvailable += OnUpdateAvailable;
         UpdateTerminalColumnWidths();
+        Loaded += OnMainWindowLoaded;
+    }
+
+    private void OnMainWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        Loaded -= OnMainWindowLoaded;
+        HookComboBoxDropDownEvents(this);
+    }
+
+    private static void HookComboBoxDropDownEvents(DependencyObject parent)
+    {
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(parent, index);
+            if (child is ComboBox comboBox)
+            {
+                comboBox.DropDownOpened += OnComboBoxDropDownOpened;
+            }
+            HookComboBoxDropDownEvents(child);
+        }
+    }
+
+    private static void OnComboBoxDropDownOpened(object? sender, EventArgs e)
+    {
+        if (sender is not ComboBox comboBox)
+        {
+            return;
+        }
+
+        _ = comboBox.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+        {
+            if (!comboBox.IsDropDownOpen
+                || comboBox.Template.FindName("PART_Popup", comboBox) is not Popup popup)
+            {
+                return;
+            }
+
+            popup.PlacementTarget = comboBox;
+            popup.Placement = PlacementMode.Bottom;
+            popup.HorizontalOffset = 0;
+            popup.VerticalOffset = 1;
+        }));
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -682,7 +724,13 @@ public partial class MainWindow : Window
 
     private void OnQuickCommandPayloadPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount == 3 && sender is TextBox textBox)
+        if (sender is not TextBox textBox)
+        {
+            return;
+        }
+
+        textBox.Focus();
+        if (e.ClickCount == 3)
         {
             textBox.SelectAll();
             e.Handled = true;
@@ -691,9 +739,14 @@ public partial class MainWindow : Window
 
     private void OnQuickVariablePreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount == 3 && sender is TextBox textBox)
+        if (sender is not TextBox textBox)
         {
-            textBox.Focus();
+            return;
+        }
+
+        textBox.Focus();
+        if (e.ClickCount == 3)
+        {
             textBox.SelectAll();
             e.Handled = true;
         }
@@ -1066,16 +1119,21 @@ public partial class MainWindow : Window
 
     private void OnOpenProfileActionsClick(object sender, RoutedEventArgs e)
     {
-        ProfileActionsMenu.PlacementTarget = ProfileActionsButton;
-        ProfileActionsMenu.Placement = PlacementMode.Bottom;
-        ProfileActionsMenu.IsOpen = true;
+        OpenContextMenuBelow(ProfileActionsMenu, ProfileActionsButton);
     }
 
     private void OnOpenTerminalMoreMenuClick(object sender, RoutedEventArgs e)
     {
-        TerminalMoreMenu.PlacementTarget = TerminalMoreButton;
-        TerminalMoreMenu.Placement = PlacementMode.Right;
-        TerminalMoreMenu.IsOpen = true;
+        OpenContextMenuBelow(TerminalMoreMenu, TerminalMoreButton);
+    }
+
+    private static void OpenContextMenuBelow(ContextMenu menu, FrameworkElement target)
+    {
+        menu.PlacementTarget = target;
+        menu.Placement = PlacementMode.Bottom;
+        menu.HorizontalOffset = 0;
+        menu.VerticalOffset = 2;
+        menu.IsOpen = true;
     }
 
     private async void OnImportDeviceProfileClick(object sender, RoutedEventArgs e)

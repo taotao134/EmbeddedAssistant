@@ -23,9 +23,9 @@ public partial class SettingsWindow : Window
         InitializeComponent();
     }
 
-    private void OnNavigationSelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    private void OnNavigationPageChecked(object sender, RoutedEventArgs e)
     {
-        if (e.NewValue is not TreeViewItem { Tag: string page }
+        if (sender is not RadioButton { Tag: string page }
             || TerminalDisplayPage is null
             || OnlineUpdatePage is null)
         {
@@ -35,18 +35,6 @@ public partial class SettingsWindow : Window
         _selectedPage = page;
         TerminalDisplayPage.Visibility = page == "TerminalDisplay" ? Visibility.Visible : Visibility.Collapsed;
         OnlineUpdatePage.Visibility = page == "OnlineUpdate" ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void OnAppearanceCategoryPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        AppearanceCategory.IsExpanded = !AppearanceCategory.IsExpanded;
-        e.Handled = true;
-    }
-
-    private void OnOnlineUpdateCategoryPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        OnlineUpdateCategory.IsExpanded = !OnlineUpdateCategory.IsExpanded;
-        e.Handled = true;
     }
 
     private void OnTextColorSwatchClick(object sender, RoutedEventArgs e)
