@@ -13,7 +13,7 @@
                  Icon="Assets/DeviceDebugStudio.ico"
                  Width="1280"
                  Height="720"
-                 MinWidth="900"
+                 MinWidth="1000"
                  MinHeight="620"
                  FontSize="12"
                  Background="{DynamicResource WorkspaceBackgroundBrush}"
@@ -31,7 +31,7 @@
                         <Grid Background="{TemplateBinding Background}" ClipToBounds="True">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="*" />
-                                <RowDefinition Height="12" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <ScrollContentPresenter x:Name="PART_ScrollContentPresenter"
                                                     CanContentScroll="{TemplateBinding CanContentScroll}"
@@ -40,6 +40,7 @@
                             <ScrollBar x:Name="PART_HorizontalScrollBar"
                                        Grid.Row="1"
                                        Height="8"
+                                       Margin="0,2"
                                        VerticalAlignment="Center"
                                        Style="{x:Null}"
                                        Background="Transparent"
@@ -96,6 +97,17 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+        <Style x:Key="ConnectionFieldLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="9" />
+            <Setter Property="Height" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="Margin" Value="3,0,0,2" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="FrameOptionLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource ConnectionFieldLabelStyle}">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="Margin" Value="2,0,0,2" />
         </Style>
     </Window.Resources>
     <Grid Background="{DynamicResource WorkspaceBackgroundBrush}">
@@ -429,17 +441,17 @@
                 </Border>
 
                 <Border Grid.Row="1"
-                        Height="46"
-                        Padding="8,4"
+                        MinHeight="50"
+                        Padding="8,2"
                         Background="{DynamicResource PanelBackgroundBrush}"
                         BorderBrush="{DynamicResource DividerBrush}"
                         BorderThickness="0,0,0,1">
-                    <Grid VerticalAlignment="Top">
+                    <Grid VerticalAlignment="Center">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="1" Margin="10,0,0,0" Orientation="Horizontal" VerticalAlignment="Top">
+                        <StackPanel Grid.Column="1" Margin="10,0,0,0" Orientation="Horizontal" VerticalAlignment="Center">
                             <ui:ToggleSwitch Height="24" Margin="0,0,8,0" FontSize="10" Content="自动重连" IsChecked="{Binding AutoReconnect}" />
                             <Button Style="{StaticResource PrimaryButtonStyle}"
                                     Height="24"
@@ -455,15 +467,14 @@
                         </StackPanel>
 
                         <ScrollViewer Grid.Column="0"
-                                      Height="36"
                                       Style="{StaticResource SeparatedHorizontalScrollViewerStyle}"
                                       HorizontalAlignment="Stretch"
-                                      VerticalAlignment="Top"
-                                      VerticalContentAlignment="Top"
+                                      VerticalAlignment="Center"
+                                      VerticalContentAlignment="Center"
                                       HorizontalScrollBarVisibility="Auto"
                                       VerticalScrollBarVisibility="Disabled"
                                       PanningMode="HorizontalOnly">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
                                         <Setter Property="IsEnabled" Value="True" />
@@ -474,24 +485,26 @@
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
-                                <ComboBox Width="100"
-                                      Height="24"
-                                      Margin="0,0,4,0"
-                                      ItemsSource="{Binding AvailableTransportOptions}"
-                                      SelectedItem="{Binding SelectedTransportOption}"
-                                      DisplayMemberPath="Name">
-                                    <ComboBox.Style>
-                                        <Style TargetType="ComboBox" BasedOn="{StaticResource ConnectionComboBoxStyle}">
+                                <StackPanel Width="100" Margin="0,0,4,0">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsModbusWorkspace}" Value="True">
                                                     <Setter Property="Visibility" Value="Collapsed" />
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </ComboBox.Style>
-                                </ComboBox>
+                                    </StackPanel.Style>
+                                    <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text="传输方式" />
+                                    <ComboBox Height="24"
+                                              Style="{StaticResource ConnectionComboBoxStyle}"
+                                              ItemsSource="{Binding AvailableTransportOptions}"
+                                              SelectedItem="{Binding SelectedTransportOption}"
+                                              DisplayMemberPath="Name"
+                                              ToolTip="TCP 客户端主动连接服务器；TCP 服务器监听本地端口；UDP 无连接收发数据。也可切换串口或蓝牙。" />
+                                </StackPanel>
 
-                            <StackPanel Orientation="Horizontal">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -505,24 +518,41 @@
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
-                                <ComboBox Width="76"
-                                          Height="24"
-                                          Style="{StaticResource ConnectionComboBoxStyle}"
-                                          Margin="0,0,2,0"
-                                          ItemsSource="{Binding SerialPorts}"
-                                          SelectedValue="{Binding PortName}"
-                                          SelectedValuePath="PortName"
-                                          DisplayMemberPath="CompactDisplayName"
-                                          ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}" />
-                                <Button Style="{StaticResource CompactIconButtonStyle}" ToolTip="刷新串口" Command="{Binding RefreshPortsCommand}">
-                                    <ui:SymbolIcon Symbol="ArrowSync20" FontSize="14" />
-                                </Button>
-                                <ComboBox Width="88" Height="24" Style="{StaticResource ConnectionComboBoxStyle}" Margin="2,0,4,0" IsEditable="True" ItemsSource="{Binding BaudRates}" Text="{Binding BaudRate}" />
-                                <CheckBox Width="76" MinWidth="76" Height="24" Margin="0,0,3,0" VerticalAlignment="Center" FontSize="10" Content="DTR" IsChecked="{Binding DtrEnable}" />
-                                <CheckBox Width="76" MinWidth="76" Height="24" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" Content="RTS" IsChecked="{Binding RtsEnable}" />
+                                <StackPanel Width="76" Margin="0,0,2,0">
+                                    <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text="串口" />
+                                    <ComboBox Height="24"
+                                              Style="{StaticResource ConnectionComboBoxStyle}"
+                                              ItemsSource="{Binding SerialPorts}"
+                                              SelectedValue="{Binding PortName}"
+                                              SelectedValuePath="PortName"
+                                              DisplayMemberPath="CompactDisplayName"
+                                              ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}" />
+                                </StackPanel>
+                                <StackPanel Width="24" Margin="0,0,2,0">
+                                    <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text=" " />
+                                    <Button Margin="0" Style="{StaticResource CompactIconButtonStyle}" ToolTip="刷新串口" Command="{Binding RefreshPortsCommand}">
+                                        <ui:SymbolIcon Symbol="ArrowSync20" FontSize="14" />
+                                    </Button>
+                                </StackPanel>
+                                <StackPanel Width="88" Margin="2,0,4,0">
+                                    <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text="波特率" />
+                                    <ComboBox Height="24"
+                                              Style="{StaticResource ConnectionComboBoxStyle}"
+                                              IsEditable="True"
+                                              ItemsSource="{Binding BaudRates}"
+                                              Text="{Binding BaudRate}" />
+                                </StackPanel>
+                                <StackPanel Width="76" Margin="0,0,3,0">
+                                    <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text=" " />
+                                    <CheckBox Height="24" VerticalAlignment="Top" FontSize="10" Content="DTR" IsChecked="{Binding DtrEnable}" />
+                                </StackPanel>
+                                <StackPanel Width="76" Margin="0,0,5,0">
+                                    <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text=" " />
+                                    <CheckBox Height="24" VerticalAlignment="Top" FontSize="10" Content="RTS" IsChecked="{Binding RtsEnable}" />
+                                </StackPanel>
                             </StackPanel>
 
-                            <StackPanel Orientation="Horizontal">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -536,11 +566,45 @@
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
-                                <TextBox Width="140" Height="24" Margin="0,0,5,0" Style="{StaticResource ConnectionTextBoxStyle}" Text="{Binding Host, UpdateSourceTrigger=PropertyChanged}" ToolTip="远端地址" />
-                                <TextBox Width="64" Height="24" Margin="0,0,6,0" Style="{StaticResource ConnectionTextBoxStyle}" Text="{Binding RemotePort}" ToolTip="远端端口" />
+                                <StackPanel Width="140" Margin="0,0,5,0">
+                                    <TextBlock>
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource ConnectionFieldLabelStyle}">
+                                                <Setter Property="Text" Value="目标地址" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedTransportOption.Kind}" Value="TcpClient">
+                                                        <Setter Property="Text" Value="服务器地址" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBox Height="24"
+                                             Style="{StaticResource ConnectionTextBoxStyle}"
+                                             Text="{Binding Host, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="TCP 服务器或 UDP 目标的 IP 地址、主机名" />
+                                </StackPanel>
+                                <StackPanel Width="64" Margin="0,0,6,0">
+                                    <TextBlock>
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource ConnectionFieldLabelStyle}">
+                                                <Setter Property="Text" Value="目标端口" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedTransportOption.Kind}" Value="TcpClient">
+                                                        <Setter Property="Text" Value="服务器端口" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBox Height="24"
+                                             Style="{StaticResource ConnectionTextBoxStyle}"
+                                             Text="{Binding RemotePort}"
+                                             ToolTip="TCP 服务器或 UDP 目标的端口号" />
+                                </StackPanel>
                             </StackPanel>
 
-                            <StackPanel Orientation="Horizontal">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -554,8 +618,42 @@
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
-                                <TextBox Width="112" Height="24" Margin="0,0,5,0" Style="{StaticResource ConnectionTextBoxStyle}" Text="{Binding LocalAddress}" ToolTip="本地地址" />
-                                <TextBox Width="64" Height="24" Margin="0,0,6,0" Style="{StaticResource ConnectionTextBoxStyle}" Text="{Binding LocalPort}" ToolTip="本地端口" />
+                                <StackPanel Width="112" Margin="0,0,5,0">
+                                    <TextBlock>
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource ConnectionFieldLabelStyle}">
+                                                <Setter Property="Text" Value="本地地址" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedTransportOption.Kind}" Value="TcpServer">
+                                                        <Setter Property="Text" Value="监听地址" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBox Height="24"
+                                             Style="{StaticResource ConnectionTextBoxStyle}"
+                                             Text="{Binding LocalAddress}"
+                                             ToolTip="TCP 服务端绑定的本机 IP；0.0.0.0 表示监听所有网卡" />
+                                </StackPanel>
+                                <StackPanel Width="64" Margin="0,0,6,0">
+                                    <TextBlock>
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource ConnectionFieldLabelStyle}">
+                                                <Setter Property="Text" Value="本地端口" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedTransportOption.Kind}" Value="TcpServer">
+                                                        <Setter Property="Text" Value="监听端口" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBox Height="24"
+                                             Style="{StaticResource ConnectionTextBoxStyle}"
+                                             Text="{Binding LocalPort}"
+                                             ToolTip="本机绑定或监听的端口号" />
+                                </StackPanel>
                             </StackPanel>
 
                             <StackPanel Orientation="Horizontal">
@@ -569,10 +667,20 @@
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
-                                <ComboBox Width="210" Height="24" Style="{StaticResource ConnectionComboBoxStyle}" Margin="0,0,4,0" ItemsSource="{Binding BleDevices}" SelectedItem="{Binding SelectedBleDevice}" DisplayMemberPath="DisplayName" />
-                                <Button Style="{StaticResource CompactIconButtonStyle}" ToolTip="扫描 BLE" Command="{Binding ScanBleCommand}">
-                                    <ui:SymbolIcon Symbol="BluetoothSearching20" Width="14" Height="14" />
-                                </Button>
+                                <StackPanel Width="210" Margin="0,0,4,0">
+                                    <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text="蓝牙设备" />
+                                    <ComboBox Height="24"
+                                              Style="{StaticResource ConnectionComboBoxStyle}"
+                                              ItemsSource="{Binding BleDevices}"
+                                              SelectedItem="{Binding SelectedBleDevice}"
+                                              DisplayMemberPath="DisplayName" />
+                                </StackPanel>
+                                <StackPanel Width="24">
+                                    <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text=" " />
+                                    <Button Margin="0" Style="{StaticResource CompactIconButtonStyle}" ToolTip="扫描 BLE" Command="{Binding ScanBleCommand}">
+                                        <ui:SymbolIcon Symbol="BluetoothSearching20" Width="14" Height="14" />
+                                    </Button>
+                                </StackPanel>
                                 </StackPanel>
                             </StackPanel>
                         </ScrollViewer>
@@ -904,40 +1012,188 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
-                            <WrapPanel Margin="0,0,0,7">
-                                <ComboBox Width="115" Margin="0,0,6,0" ItemsSource="{Binding FramingModes}" SelectedItem="{Binding SelectedFramingMode}" />
-                                <TextBox Width="110" Margin="0,0,6,0" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding DelimiterHex}" ToolTip="分隔符 HEX" />
-                                <TextBox Width="68" Margin="0,0,6,0" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding FixedFrameLength}" ToolTip="固定帧长" />
-                                <TextBox Width="60" Margin="0,0,6,0" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding LengthFieldOffset}" ToolTip="长度字段偏移" />
-                                <TextBox Width="60" Margin="0,0,6,0" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding LengthFieldSize}" ToolTip="长度字段宽度" />
-                                <TextBox Width="65" Margin="0,0,6,0" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding IdleGapMs}" ToolTip="空闲间隔 ms" />
-                                <Button Padding="12,5" Command="{Binding ApplyFramingOptionsCommand}">应用分帧</Button>
-                            </WrapPanel>
+                            <Grid Margin="0,0,0,7">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <WrapPanel VerticalAlignment="Top">
+                                    <StackPanel Width="86" Margin="0,0,4,0">
+                                        <TextBlock Style="{StaticResource FrameOptionLabelStyle}" Text="方式" />
+                                        <ComboBox Height="24"
+                                                  MinHeight="24"
+                                                  Padding="5,0"
+                                                  FontSize="10"
+                                                  Style="{StaticResource ConnectionComboBoxStyle}"
+                                                  ItemsSource="{Binding FramingModes}"
+                                                  DisplayMemberPath="Name"
+                                                  SelectedValuePath="Mode"
+                                                  SelectedValue="{Binding SelectedFramingMode, UpdateSourceTrigger=PropertyChanged}"
+                                                  ToolTip="{Binding SelectedFramingModeDescription}" />
+                                    </StackPanel>
+                                    <StackPanel Width="72" Margin="0,0,4,0">
+                                        <TextBlock Style="{StaticResource FrameOptionLabelStyle}" Text="分隔符 HEX" />
+                                        <TextBox Height="24"
+                                                 Style="{StaticResource ConnectionTextBoxStyle}"
+                                                 Text="{Binding DelimiterHex}"
+                                                 ToolTip="按十六进制输入结束标志，字节用空格分隔，例如 0D 0A；按行和分隔符模式使用。" />
+                                    </StackPanel>
+                                    <StackPanel Width="65" Margin="0,0,4,0">
+                                        <TextBlock Style="{StaticResource FrameOptionLabelStyle}" Text="固定长度" />
+                                        <TextBox Height="24"
+                                                 Style="{StaticResource ConnectionTextBoxStyle}"
+                                                 Text="{Binding FixedFrameLength}"
+                                                 ToolTip="每 N 个字节组成一帧，例如填写 8；仅固定长度模式使用。" />
+                                    </StackPanel>
+                                    <StackPanel Width="65" Margin="0,0,4,0">
+                                        <TextBlock Style="{StaticResource FrameOptionLabelStyle}" Text="长度偏移" />
+                                        <TextBox Height="24"
+                                                 Style="{StaticResource ConnectionTextBoxStyle}"
+                                                 Text="{Binding LengthFieldOffset}"
+                                                 ToolTip="长度字段从帧头第几个字节开始，0 表示首字节；仅长度字段模式使用。" />
+                                    </StackPanel>
+                                    <StackPanel Width="65" Margin="0,0,4,0">
+                                        <TextBlock Style="{StaticResource FrameOptionLabelStyle}" Text="长度宽度" />
+                                        <TextBox Height="24"
+                                                 Style="{StaticResource ConnectionTextBoxStyle}"
+                                                 Text="{Binding LengthFieldSize}"
+                                                 ToolTip="长度字段占用的字节数，范围 1-4；仅长度字段模式使用。" />
+                                    </StackPanel>
+                                    <StackPanel Width="65" Margin="0,0,4,0">
+                                        <TextBlock Style="{StaticResource FrameOptionLabelStyle}" Text="长度修正" />
+                                        <TextBox Height="24"
+                                                 Style="{StaticResource ConnectionTextBoxStyle}"
+                                                 Text="{Binding LengthAdjustment}"
+                                                 ToolTip="在长度字段计算结果上增加或减少的字节数；仅长度字段模式使用。" />
+                                    </StackPanel>
+                                    <StackPanel Width="68" Margin="0,0,4,0">
+                                        <TextBlock Style="{StaticResource FrameOptionLabelStyle}" Text="空闲间隔" />
+                                        <TextBox Height="24"
+                                                 Style="{StaticResource ConnectionTextBoxStyle}"
+                                                 Text="{Binding IdleGapMs}"
+                                                 ToolTip="两次接收间隔超过该值就结束上一帧，例如 20；仅空闲间隔模式使用。" />
+                                    </StackPanel>
+                                    <Button Width="72"
+                                            Height="24"
+                                            MinHeight="24"
+                                            Margin="0,16,0,0"
+                                            Padding="9,2"
+                                            FontSize="10"
+                                            Command="{Binding ApplyFramingOptionsCommand}">应用分帧</Button>
+                                </WrapPanel>
+                                <TextBlock Grid.Row="1"
+                                           Margin="2,3,0,0"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           Text="{Binding SelectedFramingModeDescription}"
+                                           TextWrapping="Wrap" />
+                            </Grid>
                             <Grid Grid.Row="1">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="2*" />
-                                    <ColumnDefinition Width="5" />
-                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="1.55*" MinWidth="315" />
+                                    <ColumnDefinition Width="7" />
+                                    <ColumnDefinition Width="1*" MinWidth="155" />
                                 </Grid.ColumnDefinitions>
-                                <ListView ItemsSource="{Binding FrameRecords}" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
+                                <ListView x:Name="FrameList"
+                                          ItemsSource="{Binding FrameRecords}"
+                                          SelectionMode="Extended"
+                                          SizeChanged="OnFrameListSizeChanged"
+                                          ScrollViewer.ScrollChanged="OnFrameListScrollChanged"
+                                          Background="{DynamicResource TerminalBackgroundBrush}"
+                                          Foreground="{DynamicResource TerminalTextBrush}"
+                                          BorderThickness="0"
+                                          FontFamily="Cascadia Mono, Consolas"
+                                          FontSize="{Binding TerminalFontSize}"
+                                          ScrollViewer.CanContentScroll="True"
+                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                          VirtualizingPanel.IsVirtualizing="True"
+                                          VirtualizingPanel.VirtualizationMode="Recycling">
+                                    <ListView.Resources>
+                                        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#315F58" />
+                                        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFF" />
+                                        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#284C48" />
+                                    </ListView.Resources>
+                                    <ListView.ItemContainerStyle>
+                                        <Style TargetType="ListViewItem">
+                                            <Setter Property="MinHeight" Value="26" />
+                                            <Setter Property="Padding" Value="3,0" />
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                            <Setter Property="VerticalContentAlignment" Value="Center" />
+                                        </Style>
+                                    </ListView.ItemContainerStyle>
                                     <ListView.View>
-                                        <GridView>
-                                            <GridViewColumn Width="90" Header="时间" DisplayMemberBinding="{Binding TimeText}" />
-                                            <GridViewColumn Width="55" Header="长度" DisplayMemberBinding="{Binding Length}" />
-                                            <GridViewColumn Width="360" Header="HEX" DisplayMemberBinding="{Binding Hex}" />
-                                            <GridViewColumn Width="360" Header="字段" DisplayMemberBinding="{Binding Summary}" />
+                                        <GridView AllowsColumnReorder="False">
+                                            <GridViewColumn x:Name="FrameTimeColumn" Width="100" Header="时间">
+                                                <GridViewColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBox Style="{StaticResource TerminalCellTextBoxStyle}"
+                                                                 Foreground="{Binding RelativeSource={RelativeSource AncestorType=ListViewItem}, Path=Foreground}"
+                                                                 ToolTip="{Binding TimeText}"
+                                                                 Text="{Binding TimeText, Mode=OneWay}" />
+                                                    </DataTemplate>
+                                                </GridViewColumn.CellTemplate>
+                                            </GridViewColumn>
+                                            <GridViewColumn x:Name="FrameLengthColumn" Width="56" Header="字节">
+                                                <GridViewColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBox Style="{StaticResource TerminalCellTextBoxStyle}"
+                                                                 Foreground="{Binding RelativeSource={RelativeSource AncestorType=ListViewItem}, Path=Foreground}"
+                                                                 ToolTip="{Binding Length}"
+                                                                 Text="{Binding Length, Mode=OneWay}" />
+                                                    </DataTemplate>
+                                                </GridViewColumn.CellTemplate>
+                                            </GridViewColumn>
+                                            <GridViewColumn x:Name="FrameHexColumn" Width="360" Header="HEX">
+                                                <GridViewColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBox Style="{StaticResource TerminalCellTextBoxStyle}"
+                                                                 Foreground="{Binding RelativeSource={RelativeSource AncestorType=ListViewItem}, Path=Foreground}"
+                                                                 ToolTip="{Binding Hex}"
+                                                                 Text="{Binding Hex, Mode=OneWay}" />
+                                                    </DataTemplate>
+                                                </GridViewColumn.CellTemplate>
+                                            </GridViewColumn>
+                                            <GridViewColumn x:Name="FrameSummaryColumn" Width="360" Header="字段 / 解析">
+                                                <GridViewColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBox Style="{StaticResource TerminalCellTextBoxStyle}"
+                                                                 Foreground="{Binding RelativeSource={RelativeSource AncestorType=ListViewItem}, Path=Foreground}"
+                                                                 ToolTip="{Binding Summary}"
+                                                                 Text="{Binding Summary, Mode=OneWay}" />
+                                                    </DataTemplate>
+                                                </GridViewColumn.CellTemplate>
+                                            </GridViewColumn>
                                         </GridView>
                                     </ListView.View>
                                 </ListView>
-                                <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" />
+                                <GridSplitter Grid.Column="1"
+                                              Width="7"
+                                              HorizontalAlignment="Stretch"
+                                              VerticalAlignment="Stretch"
+                                              Background="{DynamicResource DividerBrush}"
+                                              Cursor="SizeWE"
+                                              ResizeDirection="Columns"
+                                              ResizeBehavior="PreviousAndNext"
+                                              ShowsPreview="False"
+                                              ToolTip="左右拖动调整帧表格与模板区域宽度" />
                                 <Grid Grid.Column="2" Margin="8,0,0,0">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="*" />
                                         <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
-                                    <TextBlock Style="{StaticResource SectionLabelStyle}" Text="设备帧模板 JSON" />
-                                    <TextBox Grid.Row="1" AcceptsReturn="True" AcceptsTab="True" FontFamily="Cascadia Mono, Consolas" FontSize="12" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Text="{Binding FrameTemplateJson, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Style="{StaticResource SectionLabelStyle}"
+                                               Text="设备帧模板 JSON（单对象或数组；按 MatchOffset/MatchHex 匹配，空 Match 为兜底）"
+                                               TextWrapping="Wrap"
+                                               ToolTip="多个模板共用上方分帧方式，按数组顺序先匹配有 MatchHex 的模板；字段可用 LengthFromOffset 和 OffsetFromLengthOffset 表达长度前缀内容。" />
+                                    <TextBox Grid.Row="1"
+                                             AcceptsReturn="True"
+                                             AcceptsTab="True"
+                                             FontFamily="Cascadia Mono, Consolas"
+                                             FontSize="12"
+                                             HorizontalScrollBarVisibility="Auto"
+                                             VerticalScrollBarVisibility="Auto"
+                                             Text="{Binding FrameTemplateJson, UpdateSourceTrigger=PropertyChanged}" />
                                     <StackPanel Grid.Row="2" Margin="0,7,0,0" HorizontalAlignment="Right" Orientation="Horizontal">
                                         <Button Margin="0,0,5,0" Padding="9,5" Click="OnImportFrameTemplateClick">导入</Button>
                                         <Button Margin="0,0,5,0" Padding="9,5" Click="OnExportFrameTemplateClick">导出</Button>

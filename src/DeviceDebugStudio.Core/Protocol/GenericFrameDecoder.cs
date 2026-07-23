@@ -10,6 +10,42 @@ public sealed record DecodedFrame(byte[] Raw, IReadOnlyList<DecodedField> Fields
 
 public static class GenericFrameDecoder
 {
+    public static bool Matches(ReadOnlySpan<byte> frame, FrameTemplate template)
+    {
+        if (string.IsNullOrWhiteSpace(template.MatchHex))
+        {
+            return true;
+        }
+
+        if (template.MatchOffset < 0)
+        {
+            return false;
+        }
+
+        string[] tokens = template.MatchHex
+            .Split([' ', '\t', '\r', '\n', ',', ';'], StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0 || template.MatchOffset + tokens.Length > frame.Length)
+        {
+            return false;
+        }
+
+        for (int index = 0; index < tokens.Length; index++)
+        {
+            if (tokens[index] is "?" or "??")
+            {
+                continue;
+            }
+
+            if (!byte.TryParse(tokens[index], System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out byte expected)
+                || frame[template.MatchOffset + index] != expected)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public static DecodedFrame Decode(ReadOnlySpan<byte> frame, FrameTemplate template)
     {
         try
@@ -31,7 +67,7 @@ public static class GenericFrameDecoder
             bool checksumValid = ValidateChecksum(decoded, template.Checksum);
             return new DecodedFrame(decoded.ToArray(), values, checksumValid);
         }
-        catch (Exception exception) when (exception is ArgumentException or InvalidDataException or IndexOutOfRangeException)
+        catch (Exception exception) when (exception is ArgumentException or InvalidDataException or IndexOutOfRangeException or OverflowException)
         {
             return new DecodedFrame(frame.ToArray(), [], false, exception.Message);
         }
@@ -39,20 +75,29 @@ public static class GenericFrameDecoder
 
     private static DecodedField DecodeField(ReadOnlySpan<byte> frame, FrameField field)
     {
-        int length = field.Type switch
-        {
-            FrameFieldType.UInt8 or FrameFieldType.Int8 => 1,
-            FrameFieldType.UInt16 or FrameFieldType.Int16 => 2,
-            FrameFieldType.UInt32 or FrameFieldType.Int32 or FrameFieldType.Float32 => 4,
-            _ => field.Length
-        };
+        int offset = ResolveFieldOffset(frame, field);
+        int length = field.LengthFromOffset is int lengthOffset
+            ? ReadLengthByte(frame, lengthOffset)
+            : field.Type switch
+            {
+                FrameFieldType.UInt8 or FrameFieldType.Int8 => 1,
+                FrameFieldType.UInt16 or FrameFieldType.Int16 => 2,
+                FrameFieldType.UInt32 or FrameFieldType.Int32 or FrameFieldType.Float32 => 4,
+                _ => field.Length
+            };
 
-        if (field.Offset < 0 || length < 1 || field.Offset + length > frame.Length)
+        if (field.LengthFromOffset is not null
+            && field.Type is not FrameFieldType.Ascii and not FrameFieldType.Bytes)
+        {
+            throw new InvalidDataException($"字段 {field.Name} 的动态长度仅支持 ASCII 或 Bytes。 ");
+        }
+
+        if (offset < 0 || length < 0 || offset + length > frame.Length)
         {
             throw new InvalidDataException($"字段 {field.Name} 超出帧范围。 ");
         }
 
-        ReadOnlySpan<byte> data = frame.Slice(field.Offset, length);
+        ReadOnlySpan<byte> data = frame.Slice(offset, length);
         object rawValue = field.Type switch
         {
             FrameFieldType.UInt8 => data[0],
@@ -71,7 +116,27 @@ public static class GenericFrameDecoder
         object value = rawValue is IConvertible && field.Type is not FrameFieldType.Ascii and not FrameFieldType.Bytes
             ? Convert.ToDouble(rawValue) * field.Scale + field.Bias
             : rawValue;
-        return new DecodedField(field.Name, value, field.Unit, field.Offset, length);
+        return new DecodedField(field.Name, value, field.Unit, offset, length);
+    }
+
+    private static int ResolveFieldOffset(ReadOnlySpan<byte> frame, FrameField field)
+    {
+        if (field.OffsetFromLengthOffset is not int lengthOffset)
+        {
+            return field.Offset;
+        }
+
+        return checked(field.Offset + ReadLengthByte(frame, lengthOffset));
+    }
+
+    private static int ReadLengthByte(ReadOnlySpan<byte> frame, int offset)
+    {
+        if (offset < 0 || offset >= frame.Length)
+        {
+            throw new InvalidDataException("长度来源字段超出帧范围。 ");
+        }
+
+        return frame[offset];
     }
 
     private static float ReadFloat(ReadOnlySpan<byte> data, bool littleEndian)

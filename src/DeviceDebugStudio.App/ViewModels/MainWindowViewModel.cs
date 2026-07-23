@@ -28,6 +28,7 @@ namespace DeviceDebugStudio.App.ViewModels;
 
 public sealed record TransportOption(TransportKind Kind, string Name);
 public sealed record WorkspaceModeOption(WorkspaceMode Mode, string Name);
+public sealed record FramingModeOption(FramingMode Mode, string Name, string Description);
 
 public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
@@ -60,6 +61,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private Task? _consumeTask;
     private IFrameCodec _frameCodec = new RawFrameCodec();
     private FrameTemplate _frameTemplate = new();
+    private List<FrameTemplate> _frameTemplates = [new()];
     private long _rxTotal;
     private long _txTotal;
     private long _lastRateBytes;
@@ -191,7 +193,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public IReadOnlyList<string> EncodingNames { get; } = ["ASCII", "UTF-8", "GBK"];
     public IReadOnlyList<string> LineEndings { get; } = ["None", "CR", "LF", "CRLF"];
     public IReadOnlyList<ChecksumKind> ChecksumKinds { get; } = Enum.GetValues<ChecksumKind>();
-    public IReadOnlyList<FramingMode> FramingModes { get; } = Enum.GetValues<FramingMode>();
+    public IReadOnlyList<FramingModeOption> FramingModes { get; } =
+    [
+        new(FramingMode.Raw, "原始数据块", "按收到的数据块直接成帧。"),
+        new(FramingMode.Line, "按行", "遇到换行符结束一帧。"),
+        new(FramingMode.Delimiter, "分隔符", "遇到指定 HEX 分隔符结束一帧。"),
+        new(FramingMode.FixedLength, "固定长度", "每 N 个字节组成一帧。"),
+        new(FramingMode.LengthField, "长度字段", "按帧内长度字段计算整帧。"),
+        new(FramingMode.IdleGap, "空闲间隔", "接收间隔超过设定时间结束上一帧。")
+    ];
     public IReadOnlyList<string> ModbusFunctions { get; } =
     [
         "01 读线圈", "02 读离散输入", "03 读保持寄存器", "04 读输入寄存器",
@@ -378,6 +388,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public double TerminalEndpointColumnWidth { get; private set; } = AppSettings.DefaultTerminalEndpointColumnWidth;
     public double TerminalSizeColumnWidth { get; private set; } = AppSettings.DefaultTerminalSizeColumnWidth;
     public double TerminalContentColumnWidth { get; private set; } = AppSettings.DefaultTerminalContentColumnWidth;
+    public double FrameTimeColumnWidth { get; private set; } = AppSettings.DefaultFrameTimeColumnWidth;
+    public double FrameLengthColumnWidth { get; private set; } = AppSettings.DefaultFrameLengthColumnWidth;
+    public double FrameHexColumnWidth { get; private set; } = AppSettings.DefaultFrameHexColumnWidth;
+    public double FrameSummaryColumnWidth { get; private set; } = AppSettings.DefaultFrameSummaryColumnWidth;
 
     [ObservableProperty]
     private string terminalTextColor = App.DefaultTerminalTextColor;
@@ -452,6 +466,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private bool modbusSlaveEnabled;
 
     public string ConnectionButtonText => _connectionDesired ? "断开" : "连接";
+    public string SelectedFramingModeDescription => FramingModes
+        .FirstOrDefault(option => option.Mode == SelectedFramingMode)?.Description
+        ?? "请选择一种分帧方式。";
     public string ConnectionSummary => SelectedTransportKind switch
     {
         TransportKind.Serial => $"{PortName} · {BaudRate}",
@@ -1313,12 +1330,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         try
         {
-            _frameTemplate = JsonSerializer.Deserialize<FrameTemplate>(FrameTemplateJson, _jsonOptions)
-                ?? throw new JsonException("模板为空。 ");
-            LoadFrameTemplate(_frameTemplate);
-            StatusText = "帧模板已应用";
+            List<FrameTemplate> templates = DeserializeFrameTemplates(FrameTemplateJson);
+            ValidateFrameTemplates(templates);
+            LoadFrameTemplates(templates);
+            StatusText = templates.Count == 1
+                ? "帧模板已应用"
+                : $"已应用 {templates.Count} 套帧模板";
+            ScheduleProfileSave();
         }
-        catch (Exception exception) when (exception is JsonException or FormatException or ArgumentException)
+        catch (Exception exception) when (exception is JsonException or FormatException or ArgumentException or InvalidDataException)
         {
             StatusText = $"帧模板无效：{exception.Message}";
         }
@@ -1327,7 +1347,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private void ApplyFramingOptions()
     {
-        _frameTemplate = _frameTemplate with
+        FrameTemplate framing = _frameTemplate with
         {
             Mode = SelectedFramingMode,
             DelimiterHex = DelimiterHex,
@@ -1337,13 +1357,29 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             LengthAdjustment = LengthAdjustment,
             IdleGapMs = Math.Max(1, IdleGapMs)
         };
+        _frameTemplates = _frameTemplates.Count == 0
+            ? [framing]
+            : _frameTemplates.Select(template => template with
+            {
+                Mode = framing.Mode,
+                DelimiterHex = framing.DelimiterHex,
+                FixedLength = framing.FixedLength,
+                LengthOffset = framing.LengthOffset,
+                LengthSize = framing.LengthSize,
+                LengthAdjustment = framing.LengthAdjustment,
+                IdleGapMs = framing.IdleGapMs
+            }).ToList();
+        _frameTemplate = _frameTemplates[0];
         lock (_frameCodecSync)
         {
             _frameCodec = CreateCodec(_frameTemplate);
             _idleGapFlushed = true;
         }
-        FrameTemplateJson = SerializeTemplate(_frameTemplate);
-        StatusText = $"已切换分帧：{SelectedFramingMode}";
+        FrameTemplateJson = SerializeFrameTemplates(_frameTemplates);
+        string modeName = FramingModes.FirstOrDefault(option => option.Mode == SelectedFramingMode)?.Name
+            ?? SelectedFramingMode.ToString();
+        StatusText = $"已切换分帧：{modeName}";
+        ScheduleProfileSave();
     }
 
     [RelayCommand]
@@ -1509,6 +1545,28 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _appSettingsSaveTimer.Start();
     }
 
+    public void SaveFrameColumnWidths(
+        double timeWidth,
+        double lengthWidth,
+        double hexWidth,
+        double summaryWidth)
+    {
+        FrameTimeColumnWidth = NormalizeTerminalColumnWidth(
+            timeWidth,
+            AppSettings.DefaultFrameTimeColumnWidth);
+        FrameLengthColumnWidth = NormalizeTerminalColumnWidth(
+            lengthWidth,
+            AppSettings.DefaultFrameLengthColumnWidth);
+        FrameHexColumnWidth = NormalizeTerminalColumnWidth(
+            hexWidth,
+            AppSettings.DefaultFrameHexColumnWidth);
+        FrameSummaryColumnWidth = NormalizeTerminalColumnWidth(
+            summaryWidth,
+            AppSettings.DefaultFrameSummaryColumnWidth);
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
     private static double NormalizeTerminalColumnWidth(double value, double fallback) =>
         double.IsFinite(value) && value > 0 ? Math.Clamp(value, 24, 5000) : fallback;
 
@@ -1533,6 +1591,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             TerminalContentColumnWidth = NormalizeTerminalColumnWidth(
                 settings.TerminalContentColumnWidth,
                 AppSettings.DefaultTerminalContentColumnWidth);
+            FrameTimeColumnWidth = NormalizeTerminalColumnWidth(
+                settings.FrameTimeColumnWidth,
+                AppSettings.DefaultFrameTimeColumnWidth);
+            FrameLengthColumnWidth = NormalizeTerminalColumnWidth(
+                settings.FrameLengthColumnWidth,
+                AppSettings.DefaultFrameLengthColumnWidth);
+            FrameHexColumnWidth = NormalizeTerminalColumnWidth(
+                settings.FrameHexColumnWidth,
+                AppSettings.DefaultFrameHexColumnWidth);
+            FrameSummaryColumnWidth = NormalizeTerminalColumnWidth(
+                settings.FrameSummaryColumnWidth,
+                AppSettings.DefaultFrameSummaryColumnWidth);
             TerminalTextColor = App.NormalizeTerminalColor(settings.TerminalTextColor, App.DefaultTerminalTextColor);
             TerminalBackgroundColor = App.NormalizeTerminalColor(settings.TerminalBackgroundColor, App.DefaultTerminalBackgroundColor);
             LoadTerminalPalette(TerminalTextPalette, settings.TerminalTextPalette, App.DefaultTerminalTextPalette);
@@ -1679,6 +1749,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(ConnectionSummary));
         ScheduleProfileSave();
     }
+
+    partial void OnSelectedFramingModeChanged(FramingMode value) =>
+        OnPropertyChanged(nameof(SelectedFramingModeDescription));
 
     partial void OnProfileNameChanged(string value) => ScheduleProfileSave();
 
@@ -2045,8 +2118,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         foreach (byte[] frame in frames)
         {
-            DecodedFrame decoded = GenericFrameDecoder.Decode(frame, _frameTemplate);
-            _pendingFrames.Enqueue(FrameRecordItem.Create(timestamp, decoded));
+            FrameTemplate? template = SelectFrameTemplate(frame);
+            DecodedFrame decoded = template is null
+                ? new DecodedFrame(frame, [], false, "未匹配帧模板")
+                : GenericFrameDecoder.Decode(frame, template);
+            _pendingFrames.Enqueue(FrameRecordItem.Create(timestamp, decoded, template?.Name));
             foreach (DecodedField field in decoded.Fields)
             {
                 if (field.Value is double numeric)
@@ -2055,6 +2131,19 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 }
             }
         }
+    }
+
+    private FrameTemplate? SelectFrameTemplate(ReadOnlySpan<byte> frame)
+    {
+        foreach (FrameTemplate template in _frameTemplates.Where(template => !string.IsNullOrWhiteSpace(template.MatchHex)))
+        {
+            if (GenericFrameDecoder.Matches(frame, template))
+            {
+                return template;
+            }
+        }
+
+        return _frameTemplates.FirstOrDefault(template => string.IsNullOrWhiteSpace(template.MatchHex));
     }
 
     private async Task<bool> SendPayloadAsync(
@@ -2595,7 +2684,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 quickCommands.Add(new QuickCommandItemViewModel(normalizedCommand));
             }
             ReplaceQuickCommands(quickCommands);
-            LoadFrameTemplate(profile.FrameTemplate);
+            LoadFrameTemplates(profile.FrameTemplates.Count > 0
+                ? profile.FrameTemplates
+                : [profile.FrameTemplate]);
             _activeProfile = profile;
         }
         finally
@@ -2604,20 +2695,26 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private void LoadFrameTemplate(FrameTemplate template)
+    private void LoadFrameTemplates(IEnumerable<FrameTemplate> templates)
     {
-        _frameTemplate = template;
-        SelectedFramingMode = template.Mode;
-        DelimiterHex = template.DelimiterHex;
-        FixedFrameLength = template.FixedLength;
-        LengthFieldOffset = template.LengthOffset;
-        LengthFieldSize = template.LengthSize;
-        LengthAdjustment = template.LengthAdjustment;
-        IdleGapMs = template.IdleGapMs;
-        FrameTemplateJson = SerializeTemplate(template);
+        _frameTemplates = templates.ToList();
+        if (_frameTemplates.Count == 0)
+        {
+            _frameTemplates.Add(new FrameTemplate());
+        }
+
+        _frameTemplate = _frameTemplates[0];
+        SelectedFramingMode = _frameTemplate.Mode;
+        DelimiterHex = _frameTemplate.DelimiterHex;
+        FixedFrameLength = _frameTemplate.FixedLength;
+        LengthFieldOffset = _frameTemplate.LengthOffset;
+        LengthFieldSize = _frameTemplate.LengthSize;
+        LengthAdjustment = _frameTemplate.LengthAdjustment;
+        IdleGapMs = _frameTemplate.IdleGapMs;
+        FrameTemplateJson = SerializeFrameTemplates(_frameTemplates);
         lock (_frameCodecSync)
         {
-            _frameCodec = CreateCodec(template);
+            _frameCodec = CreateCodec(_frameTemplate);
             _idleGapFlushed = true;
         }
     }
@@ -2643,6 +2740,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         },
         CommandGroups = [new QuickCommandGroup { Name = "常用命令", Commands = QuickCommands.Select(item => item.ToModel()).ToList() }],
         FrameTemplate = _frameTemplate,
+        FrameTemplates = _frameTemplates.ToList(),
         ChartBindings = _activeProfile?.ChartBindings ?? []
     };
 
@@ -2780,6 +2878,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 TerminalEndpointColumnWidth = TerminalEndpointColumnWidth,
                 TerminalSizeColumnWidth = TerminalSizeColumnWidth,
                 TerminalContentColumnWidth = TerminalContentColumnWidth,
+                FrameTimeColumnWidth = FrameTimeColumnWidth,
+                FrameLengthColumnWidth = FrameLengthColumnWidth,
+                FrameHexColumnWidth = FrameHexColumnWidth,
+                FrameSummaryColumnWidth = FrameSummaryColumnWidth,
                 TerminalTextColor = App.NormalizeTerminalColor(TerminalTextColor, App.DefaultTerminalTextColor),
                 TerminalBackgroundColor = App.NormalizeTerminalColor(TerminalBackgroundColor, App.DefaultTerminalBackgroundColor),
                 GitHubRepository = GitHubRepository.Trim(),
@@ -2824,6 +2926,57 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter() }
     });
+
+    private List<FrameTemplate> DeserializeFrameTemplates(string json)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        return document.RootElement.ValueKind switch
+        {
+            JsonValueKind.Array => JsonSerializer.Deserialize<List<FrameTemplate>>(document.RootElement.GetRawText(), _jsonOptions) ?? [],
+            JsonValueKind.Object =>
+            [JsonSerializer.Deserialize<FrameTemplate>(document.RootElement.GetRawText(), _jsonOptions)
+                ?? throw new JsonException("模板为空。 ")],
+            _ => throw new JsonException("模板必须是 JSON 对象或数组。 ")
+        };
+    }
+
+    private static void ValidateFrameTemplates(IEnumerable<FrameTemplate> templates)
+    {
+        List<FrameTemplate> items = templates.ToList();
+        if (items.Count == 0)
+        {
+            throw new InvalidDataException("至少需要一套帧模板。 ");
+        }
+
+        foreach (FrameTemplate template in items)
+        {
+            if (string.IsNullOrWhiteSpace(template.MatchHex))
+            {
+                continue;
+            }
+
+            if (template.MatchOffset < 0)
+            {
+                throw new InvalidDataException($"模板“{template.Name}”的 MatchOffset 必须大于等于 0。 ");
+            }
+
+            string[] tokens = template.MatchHex
+                .Split([' ', '\t', '\r', '\n', ',', ';'], StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0 || tokens.Any(token => token is not ("?" or "??")
+                && !byte.TryParse(token, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out _)))
+            {
+                throw new FormatException($"模板“{template.Name}”的 MatchHex 不是有效十六进制。 ");
+            }
+        }
+    }
+
+    private string SerializeFrameTemplates(IReadOnlyList<FrameTemplate> templates) => templates.Count == 1
+        ? SerializeTemplate(templates[0])
+        : JsonSerializer.Serialize(templates, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Converters = { new JsonStringEnumConverter() }
+        });
 
     private static ushort[] ParseRegisterValues(string text)
     {

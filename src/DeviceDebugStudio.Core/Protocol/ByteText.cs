@@ -132,6 +132,45 @@ public static partial class ByteText
         return result.ToString();
     }
 
+    public static string NormalizeSscomCommandText(string text)
+    {
+        if (string.IsNullOrEmpty(text) || text.IndexOf('\u0002') < 0)
+        {
+            return text;
+        }
+
+        StringBuilder result = new(text.Length);
+        bool previousInputWasSeparator = false;
+        foreach (char value in text)
+        {
+            if (value == '\u0002')
+            {
+                if (!previousInputWasSeparator && (result.Length == 0 || result[^1] != ','))
+                {
+                    result.Append(',');
+                }
+                else if (previousInputWasSeparator)
+                {
+                    result.Append(',');
+                }
+
+                previousInputWasSeparator = true;
+                continue;
+            }
+
+            if (value == ',' && previousInputWasSeparator && result.Length > 0 && result[^1] == ',')
+            {
+                previousInputWasSeparator = false;
+                continue;
+            }
+
+            result.Append(value);
+            previousInputWasSeparator = false;
+        }
+
+        return result.ToString();
+    }
+
     public static string ExpandVariables(string input, IReadOnlyDictionary<string, string> variables) =>
         VariableRegex().Replace(input, match => variables.TryGetValue(match.Groups[1].Value, out string? value) ? value : match.Value);
 

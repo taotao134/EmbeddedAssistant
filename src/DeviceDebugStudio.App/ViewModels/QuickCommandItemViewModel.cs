@@ -16,11 +16,19 @@ public partial class QuickCommandItemViewModel : ObservableObject
     {
         Id = command.Id;
         name = command.Name;
-        payload = command.Payload;
-        template = string.IsNullOrEmpty(command.Template) ? command.Payload : command.Template;
-        _payloadAndTemplateLinked = string.IsNullOrEmpty(command.Template)
-            || (!VariableRegex.IsMatch(command.Template)
-                && string.Equals(command.Template, command.Payload, StringComparison.Ordinal));
+        string initialPayload = ByteText.NormalizeSscomCommandText(command.Payload);
+        string initialTemplate = ByteText.NormalizeSscomCommandText(
+            string.IsNullOrEmpty(command.Template) ? initialPayload : command.Template);
+        if (!VariableRegex.IsMatch(initialTemplate))
+        {
+            if (string.IsNullOrEmpty(initialPayload))
+            {
+                initialPayload = initialTemplate;
+            }
+            initialTemplate = initialPayload;
+        }
+        payload = initialPayload;
+        template = initialTemplate;
         isHex = command.IsHex;
         lineEnding = command.LineEnding;
         checksum = command.Checksum;
@@ -114,12 +122,10 @@ public partial class QuickCommandItemViewModel : ObservableObject
     [ObservableProperty]
     private bool isExpanded;
 
-    private bool _payloadAndTemplateLinked;
-
     public string UsageText => UsageCount == 0 ? "未使用" : $"使用 {UsageCount} 次";
     public string UsageShortText => UsageCount > 999 ? "999+" : UsageCount.ToString();
     public string VariableSetCountText => $"{VariableSets.Count} 套方案";
-    public string TemplateOrPayload => _payloadAndTemplateLinked ? Payload : Template;
+    public string TemplateOrPayload => HasTemplateVariables ? Template : Payload;
     public string ResolvedPayload => ByteText.ExpandVariables(TemplateOrPayload, SelectedVariableSet?.GetValues() ?? EmptyVariables);
     public bool HasTemplateVariables => GetTemplateVariableNames().Count > 0;
     public bool IsDirectPayloadMode => !HasTemplateVariables;
@@ -163,8 +169,8 @@ public partial class QuickCommandItemViewModel : ObservableObject
     {
         Id = Id,
         Name = Name,
-        Payload = Payload,
-        Template = Template,
+        Payload = ByteText.NormalizeSscomCommandText(Payload),
+        Template = ByteText.NormalizeSscomCommandText(Template),
         IsHex = IsHex,
         LineEnding = LineEnding,
         Checksum = Checksum,
@@ -210,7 +216,15 @@ public partial class QuickCommandItemViewModel : ObservableObject
 
     partial void OnPayloadChanged(string value)
     {
-        if (_payloadAndTemplateLinked && !string.Equals(template, value, StringComparison.Ordinal))
+        string normalized = ByteText.NormalizeSscomCommandText(value);
+        if (!string.Equals(normalized, value, StringComparison.Ordinal))
+        {
+            payload = normalized;
+            value = normalized;
+            OnPropertyChanged(nameof(Payload));
+        }
+
+        if (!HasTemplateVariables && !string.Equals(template, value, StringComparison.Ordinal))
         {
             template = value;
             OnPropertyChanged(nameof(Template));
@@ -221,18 +235,18 @@ public partial class QuickCommandItemViewModel : ObservableObject
 
     partial void OnTemplateChanged(string value)
     {
-        if (VariableRegex.IsMatch(value))
+        string normalized = ByteText.NormalizeSscomCommandText(value);
+        if (!string.Equals(normalized, value, StringComparison.Ordinal))
         {
-            _payloadAndTemplateLinked = false;
+            template = normalized;
+            value = normalized;
+            OnPropertyChanged(nameof(Template));
         }
-        else
+
+        if (!VariableRegex.IsMatch(value) && !string.Equals(payload, value, StringComparison.Ordinal))
         {
-            _payloadAndTemplateLinked = true;
-            if (!string.Equals(payload, value, StringComparison.Ordinal))
-            {
-                payload = value;
-                OnPropertyChanged(nameof(Payload));
-            }
+            payload = value;
+            OnPropertyChanged(nameof(Payload));
         }
         OnPropertyChanged(nameof(TemplateOrPayload));
         SynchronizeTemplateVariables();

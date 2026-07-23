@@ -258,7 +258,7 @@ public sealed class LegacyConfigImporter
         }
 
         mode = value[0];
-        payload = value[(separator + 1)..];
+        payload = ByteText.NormalizeSscomCommandText(value[(separator + 1)..]);
         return true;
     }
 

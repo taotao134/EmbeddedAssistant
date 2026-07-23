@@ -33,6 +33,10 @@ public partial class MainWindow : Window
     private const double TerminalEndpointColumnMinWidth = 70;
     private const double TerminalSizeColumnMinWidth = 38;
     private const double TerminalContentColumnMinWidth = 140;
+    private const double FrameTimeColumnMinWidth = 60;
+    private const double FrameLengthColumnMinWidth = 42;
+    private const double FrameHexColumnMinWidth = 100;
+    private const double FrameSummaryColumnMinWidth = 110;
     private const int WmNonClientLeftButtonDoubleClick = 0x00A3;
     private const int WmNonClientHitTest = 0x0084;
     private const int WmSystemCommand = 0x0112;
@@ -57,6 +61,8 @@ public partial class MainWindow : Window
     private int? _quickCommandDropInsertionIndex;
     private bool _terminalColumnDragActive;
     private double _terminalViewportWidth;
+    private bool _frameColumnDragActive;
+    private double _frameViewportWidth;
     private bool _updatePromptVisible;
 
     private enum SidebarFocus
@@ -78,6 +84,14 @@ public partial class MainWindow : Window
         TerminalList.AddHandler(
             Thumb.DragCompletedEvent,
             new DragCompletedEventHandler(OnTerminalColumnHeaderDragCompleted),
+            true);
+        FrameList.AddHandler(
+            Thumb.DragDeltaEvent,
+            new DragDeltaEventHandler(OnFrameColumnHeaderDragDelta),
+            true);
+        FrameList.AddHandler(
+            Thumb.DragCompletedEvent,
+            new DragCompletedEventHandler(OnFrameColumnHeaderDragCompleted),
             true);
 
         _chartLogger = RealtimePlot.Plot.Add.DataLogger();
@@ -102,10 +116,12 @@ public partial class MainWindow : Window
         _viewModel.ChartValueAdded += OnChartValueAdded;
         _viewModel.RecordsAppended += OnRecordsAppended;
         _viewModel.TerminalRecords.CollectionChanged += OnTerminalRecordsCollectionChanged;
+        _viewModel.FrameRecords.CollectionChanged += OnFrameRecordsCollectionChanged;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _viewModel.QuickCommandAdded += OnQuickCommandAdded;
         _viewModel.UpdateAvailable += OnUpdateAvailable;
         UpdateTerminalColumnWidths();
+        UpdateFrameColumnWidths();
         Loaded += OnMainWindowLoaded;
     }
 
@@ -161,6 +177,7 @@ public partial class MainWindow : Window
     {
         _viewModel.QuickCommandAdded -= OnQuickCommandAdded;
         _viewModel.UpdateAvailable -= OnUpdateAvailable;
+        _viewModel.FrameRecords.CollectionChanged -= OnFrameRecordsCollectionChanged;
         _windowSource?.RemoveHook(OnWindowMessage);
         _windowSource = null;
         base.OnClosed(e);
@@ -264,6 +281,103 @@ public partial class MainWindow : Window
         {
             UpdateTerminalColumnWidths(viewportWidth);
         }
+    }
+
+    private void OnFrameListSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdateFrameColumnWidths();
+    }
+
+    private void OnFrameListScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        double viewportWidth = GetFrameViewportWidth();
+        if (viewportWidth > 0 && Math.Abs(viewportWidth - _frameViewportWidth) > 0.1)
+        {
+            UpdateFrameColumnWidths(viewportWidth);
+        }
+    }
+
+    private void OnFrameColumnHeaderDragDelta(object sender, DragDeltaEventArgs e)
+    {
+        if (e.OriginalSource is not Thumb thumb
+            || FindVisualParent<GridViewColumnHeader>(thumb)?.Column is not GridViewColumn column
+            || !TryGetFrameColumnMinimumWidth(column, out double minimumWidth))
+        {
+            return;
+        }
+
+        _frameColumnDragActive = true;
+        double timeMinimumWidth = GetFrameColumnMinimumWidth(FrameTimeColumn);
+        double lengthMinimumWidth = GetFrameColumnMinimumWidth(FrameLengthColumn);
+        double hexMinimumWidth = GetFrameColumnMinimumWidth(FrameHexColumn);
+        double summaryMinimumWidth = FrameSummaryColumnMinWidth;
+        FrameTimeColumn.Width = Math.Max(timeMinimumWidth, FrameTimeColumn.ActualWidth);
+        FrameLengthColumn.Width = Math.Max(lengthMinimumWidth, FrameLengthColumn.ActualWidth);
+        FrameHexColumn.Width = Math.Max(hexMinimumWidth, FrameHexColumn.ActualWidth);
+        FrameSummaryColumn.Width = Math.Max(summaryMinimumWidth, FrameSummaryColumn.ActualWidth);
+
+        double viewportWidth = GetFrameViewportWidth();
+        double otherWidth = FrameTimeColumn.Width
+            + FrameLengthColumn.Width
+            + FrameHexColumn.Width
+            + FrameSummaryColumn.Width
+            - column.Width;
+        double reservedMinimum = ReferenceEquals(column, FrameSummaryColumn)
+            ? 0
+            : summaryMinimumWidth;
+        double currentWidth = column.Width > 0 ? column.Width : column.ActualWidth;
+        double maximumWidth = Math.Max(minimumWidth, viewportWidth - otherWidth - reservedMinimum);
+        column.Width = Math.Clamp(currentWidth + e.HorizontalChange, minimumWidth, maximumWidth);
+        FitFrameSummaryColumn(viewportWidth);
+    }
+
+    private void OnFrameColumnHeaderDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (!_frameColumnDragActive)
+        {
+            return;
+        }
+
+        _frameColumnDragActive = false;
+        FitFrameSummaryColumn(GetFrameViewportWidth());
+        _viewModel.SaveFrameColumnWidths(
+            FrameTimeColumn.Width,
+            FrameLengthColumn.Width,
+            FrameHexColumn.Width,
+            FrameSummaryColumn.Width);
+    }
+
+    private bool TryGetFrameColumnMinimumWidth(GridViewColumn column, out double minimumWidth)
+    {
+        minimumWidth = GetFrameColumnMinimumWidth(column);
+        return minimumWidth > 0;
+    }
+
+    private double GetFrameColumnMinimumWidth(GridViewColumn column) =>
+        ReferenceEquals(column, FrameTimeColumn)
+            ? GetFrameTextMinimumWidth("时间", item => item.TimeText, FrameTimeColumnMinWidth)
+                : ReferenceEquals(column, FrameLengthColumn)
+                    ? GetFrameTextMinimumWidth("字节", item => item.Length.ToString(), FrameLengthColumnMinWidth)
+                : ReferenceEquals(column, FrameHexColumn)
+                    ? FrameHexColumnMinWidth
+                    : ReferenceEquals(column, FrameSummaryColumn)
+                        ? GetFrameTextMinimumWidth("字段 / 解析", item => item.Summary, FrameSummaryColumnMinWidth)
+                        : 0;
+
+    private double GetFrameTextMinimumWidth(
+        string header,
+        Func<FrameRecordItem, string> valueSelector,
+        double hardMinimumWidth)
+    {
+        int maximumLength = header.Length;
+        int firstIndex = Math.Max(0, _viewModel.FrameRecords.Count - 64);
+        for (int index = firstIndex; index < _viewModel.FrameRecords.Count; index++)
+        {
+            maximumLength = Math.Max(maximumLength, valueSelector(_viewModel.FrameRecords[index]).Length);
+        }
+
+        double characterWidth = Math.Max(6, _viewModel.TerminalFontSize * 0.62);
+        return Math.Max(hardMinimumWidth, Math.Min(520, maximumLength * characterWidth + 16));
     }
 
     private void OnTerminalColumnHeaderDragDelta(object sender, DragDeltaEventArgs e)
@@ -435,6 +549,14 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnFrameRecordsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action is NotifyCollectionChangedAction.Add or NotifyCollectionChangedAction.Reset)
+        {
+            UpdateFrameColumnWidths();
+        }
+    }
+
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(MainWindowViewModel.ReceiveAsHex)
@@ -446,6 +568,7 @@ public partial class MainWindow : Window
         else if (e.PropertyName == nameof(MainWindowViewModel.TerminalFontSize))
         {
             UpdateTerminalColumnWidths();
+            UpdateFrameColumnWidths();
         }
     }
 
@@ -455,6 +578,15 @@ public partial class MainWindow : Window
         double viewportWidth = presenter is { ActualWidth: > 0 }
             ? presenter.ActualWidth
             : TerminalList.ActualWidth;
+        return viewportWidth > 0 && double.IsFinite(viewportWidth) ? viewportWidth : 0;
+    }
+
+    private double GetFrameViewportWidth()
+    {
+        ScrollContentPresenter? presenter = FindVisualChild<ScrollContentPresenter>(FrameList);
+        double viewportWidth = presenter is { ActualWidth: > 0 }
+            ? presenter.ActualWidth
+            : FrameList.ActualWidth;
         return viewportWidth > 0 && double.IsFinite(viewportWidth) ? viewportWidth : 0;
     }
 
@@ -540,6 +672,81 @@ public partial class MainWindow : Window
         TerminalEndpointColumn.Width = endpointWidth;
         TerminalSizeColumn.Width = sizeWidth;
         TerminalContentColumn.Width = contentWidth;
+    }
+
+    private void FitFrameSummaryColumn(double viewportWidth)
+    {
+        if (viewportWidth <= 0)
+        {
+            return;
+        }
+
+        _frameViewportWidth = viewportWidth;
+        double metadataWidth = FrameTimeColumn.Width
+            + FrameLengthColumn.Width
+            + FrameHexColumn.Width;
+        FrameSummaryColumn.Width = Math.Max(
+            FrameSummaryColumnMinWidth,
+            viewportWidth - metadataWidth);
+    }
+
+    private void UpdateFrameColumnWidths(double? measuredViewportWidth = null)
+    {
+        double viewportWidth = measuredViewportWidth ?? GetFrameViewportWidth();
+        double baseTimeWidth = _viewModel.FrameTimeColumnWidth;
+        double baseLengthWidth = _viewModel.FrameLengthColumnWidth;
+        double baseHexWidth = _viewModel.FrameHexColumnWidth;
+        double baseSummaryWidth = _viewModel.FrameSummaryColumnWidth;
+        double baseTotalWidth = baseTimeWidth + baseLengthWidth + baseHexWidth + baseSummaryWidth;
+        if (viewportWidth <= 0)
+        {
+            viewportWidth = baseTotalWidth;
+        }
+
+        _frameViewportWidth = viewportWidth;
+        if (_frameColumnDragActive)
+        {
+            FitFrameSummaryColumn(viewportWidth);
+            return;
+        }
+
+        double timeMinimumWidth = GetFrameColumnMinimumWidth(FrameTimeColumn);
+        double lengthMinimumWidth = GetFrameColumnMinimumWidth(FrameLengthColumn);
+        double hexMinimumWidth = GetFrameColumnMinimumWidth(FrameHexColumn);
+        double summaryMinimumWidth = FrameSummaryColumnMinWidth;
+        double scale = viewportWidth / baseTotalWidth;
+        double timeWidth = Math.Max(timeMinimumWidth, baseTimeWidth * scale);
+        double lengthWidth = Math.Max(lengthMinimumWidth, baseLengthWidth * scale);
+        double hexWidth = Math.Max(hexMinimumWidth, baseHexWidth * scale);
+        double summaryWidth = Math.Max(summaryMinimumWidth, baseSummaryWidth * scale);
+
+        double totalWidth = timeWidth + lengthWidth + hexWidth + summaryWidth;
+        double overflow = Math.Max(0, totalWidth - viewportWidth);
+        double summaryReduction = Math.Min(overflow, summaryWidth - summaryMinimumWidth);
+        summaryWidth -= summaryReduction;
+        overflow -= summaryReduction;
+
+        if (overflow > 0)
+        {
+            double flexibleWidth = timeWidth - timeMinimumWidth
+                + lengthWidth - lengthMinimumWidth
+                + hexWidth - hexMinimumWidth;
+            if (flexibleWidth > 0)
+            {
+                double reductionRatio = Math.Min(1, overflow / flexibleWidth);
+                timeWidth -= (timeWidth - timeMinimumWidth) * reductionRatio;
+                lengthWidth -= (lengthWidth - lengthMinimumWidth) * reductionRatio;
+                hexWidth -= (hexWidth - hexMinimumWidth) * reductionRatio;
+            }
+        }
+
+        double fittedWidth = timeWidth + lengthWidth + hexWidth + summaryWidth;
+        summaryWidth += Math.Max(0, viewportWidth - fittedWidth);
+
+        FrameTimeColumn.Width = timeWidth;
+        FrameLengthColumn.Width = lengthWidth;
+        FrameHexColumn.Width = hexWidth;
+        FrameSummaryColumn.Width = summaryWidth;
     }
 
     private void OnTerminalPreviewKeyDown(object sender, KeyEventArgs e)
@@ -729,9 +936,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        textBox.Focus();
         if (e.ClickCount == 3)
         {
+            textBox.Focus();
             textBox.SelectAll();
             e.Handled = true;
         }
@@ -744,9 +951,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        textBox.Focus();
         if (e.ClickCount == 3)
         {
+            textBox.Focus();
             textBox.SelectAll();
             e.Handled = true;
         }
@@ -1534,6 +1741,7 @@ public partial class MainWindow : Window
         }
 
         EnforcePanelLayout();
+        UpdateFrameColumnWidths();
     }
 
     private void OnDeviceSplitterDragCompleted(object sender, DragCompletedEventArgs e)

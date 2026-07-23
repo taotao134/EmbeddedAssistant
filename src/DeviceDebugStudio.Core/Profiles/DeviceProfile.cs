@@ -24,6 +24,7 @@ public sealed record DeviceProfile
     public TerminalPreferences Terminal { get; init; } = new();
     public List<QuickCommandGroup> CommandGroups { get; init; } = [];
     public FrameTemplate FrameTemplate { get; init; } = new();
+    public List<FrameTemplate> FrameTemplates { get; init; } = [];
     public List<ChartBinding> ChartBindings { get; init; } = [];
     public DateTimeOffset UpdatedAt { get; init; } = DateTimeOffset.Now;
 }
@@ -104,6 +105,8 @@ public enum EscapeMode
 public sealed record FrameTemplate
 {
     public string Name { get; init; } = "原始数据";
+    public int MatchOffset { get; init; } = -1;
+    public string MatchHex { get; init; } = string.Empty;
     public FramingMode Mode { get; init; }
     public string DelimiterHex { get; init; } = "0D 0A";
     public int FixedLength { get; init; } = 8;
@@ -137,6 +140,8 @@ public sealed record FrameField
     public FrameFieldType Type { get; init; }
     public int Offset { get; init; }
     public int Length { get; init; } = 1;
+    public int? LengthFromOffset { get; init; }
+    public int? OffsetFromLengthOffset { get; init; }
     public bool LittleEndian { get; init; } = true;
     public int BitOffset { get; init; }
     public int BitLength { get; init; } = 1;

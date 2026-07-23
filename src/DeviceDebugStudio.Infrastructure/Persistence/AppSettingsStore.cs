@@ -10,6 +10,10 @@ public sealed record AppSettings
     public const double DefaultTerminalEndpointColumnWidth = 150;
     public const double DefaultTerminalSizeColumnWidth = 66;
     public const double DefaultTerminalContentColumnWidth = 760;
+    public const double DefaultFrameTimeColumnWidth = 100;
+    public const double DefaultFrameLengthColumnWidth = 56;
+    public const double DefaultFrameHexColumnWidth = 360;
+    public const double DefaultFrameSummaryColumnWidth = 360;
 
     public string ProfileDirectory { get; init; } = AppPaths.ProfilesDirectory;
     public Guid? SelectedProfileId { get; init; }
@@ -19,6 +23,10 @@ public sealed record AppSettings
     public double TerminalEndpointColumnWidth { get; init; } = DefaultTerminalEndpointColumnWidth;
     public double TerminalSizeColumnWidth { get; init; } = DefaultTerminalSizeColumnWidth;
     public double TerminalContentColumnWidth { get; init; } = DefaultTerminalContentColumnWidth;
+    public double FrameTimeColumnWidth { get; init; } = DefaultFrameTimeColumnWidth;
+    public double FrameLengthColumnWidth { get; init; } = DefaultFrameLengthColumnWidth;
+    public double FrameHexColumnWidth { get; init; } = DefaultFrameHexColumnWidth;
+    public double FrameSummaryColumnWidth { get; init; } = DefaultFrameSummaryColumnWidth;
     public string TerminalTextColor { get; init; } = "#E6EBE8";
     public string TerminalBackgroundColor { get; init; } = "#141817";
     public string GitHubRepository { get; init; } = DefaultGitHubRepository;

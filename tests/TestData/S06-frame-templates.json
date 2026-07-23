@@ -1,0 +1,146 @@
+[
+  {
+    "Name": "S06 心跳 F_LIVE",
+    "MatchOffset": 3,
+    "MatchHex": "00",
+    "Mode": "LengthField",
+    "LengthOffset": 1,
+    "LengthSize": 2,
+    "LittleEndian": false,
+    "Checksum": "None",
+    "Fields": [
+      { "Name": "帧头", "Type": "Bytes", "Offset": 0, "Length": 1 },
+      { "Name": "帧长", "Type": "UInt16", "Offset": 1, "LittleEndian": false },
+      { "Name": "帧类型", "Type": "UInt8", "Offset": 3 },
+      { "Name": "设备ID", "Type": "Ascii", "Offset": 4, "Length": 8 },
+      { "Name": "CRC占位", "Type": "Bytes", "Offset": 12, "Length": 2 },
+      { "Name": "帧尾", "Type": "Bytes", "Offset": 14, "Length": 1 }
+    ]
+  },
+  {
+    "Name": "S06 状态 F_SAT",
+    "MatchOffset": 3,
+    "MatchHex": "01",
+    "Mode": "LengthField",
+    "LengthOffset": 1,
+    "LengthSize": 2,
+    "LittleEndian": false,
+    "Checksum": "None",
+    "Fields": [
+      { "Name": "帧头", "Type": "Bytes", "Offset": 0, "Length": 1 },
+      { "Name": "帧长", "Type": "UInt16", "Offset": 1, "LittleEndian": false },
+      { "Name": "帧类型", "Type": "UInt8", "Offset": 3 },
+      { "Name": "设备ID", "Type": "Ascii", "Offset": 4, "Length": 8 },
+      { "Name": "SOS状态", "Type": "UInt8", "Offset": 12 },
+      { "Name": "经度", "Type": "UInt32", "Offset": 13, "LittleEndian": false, "Scale": 0.000001, "Unit": "°" },
+      { "Name": "纬度", "Type": "UInt32", "Offset": 17, "LittleEndian": false, "Scale": 0.000001, "Unit": "°" },
+      { "Name": "北斗定位", "Type": "UInt8", "Offset": 21 },
+      { "Name": "天通状态", "Type": "UInt8", "Offset": 22 },
+      { "Name": "信号质量", "Type": "UInt8", "Offset": 23 },
+      { "Name": "电池", "Type": "UInt8", "Offset": 24, "Unit": "%" },
+      { "Name": "CRC占位", "Type": "Bytes", "Offset": 25, "Length": 2 },
+      { "Name": "帧尾", "Type": "Bytes", "Offset": 27, "Length": 1 }
+    ]
+  },
+  {
+    "Name": "S06 上线 F_UP",
+    "MatchOffset": 1,
+    "MatchHex": "00 0F 02",
+    "Mode": "LengthField",
+    "LengthOffset": 1,
+    "LengthSize": 2,
+    "LittleEndian": false,
+    "Checksum": "None",
+    "Fields": [
+      { "Name": "帧头", "Type": "Bytes", "Offset": 0, "Length": 1 },
+      { "Name": "帧长", "Type": "UInt16", "Offset": 1, "LittleEndian": false },
+      { "Name": "帧类型", "Type": "UInt8", "Offset": 3 },
+      { "Name": "设备ID", "Type": "Ascii", "Offset": 4, "Length": 8 },
+      { "Name": "CRC占位", "Type": "Bytes", "Offset": 12, "Length": 2 },
+      { "Name": "帧尾", "Type": "Bytes", "Offset": 14, "Length": 1 }
+    ]
+  },
+  {
+    "Name": "S06 下线 F_DOWM",
+    "MatchOffset": 1,
+    "MatchHex": "00 0F 03",
+    "Mode": "LengthField",
+    "LengthOffset": 1,
+    "LengthSize": 2,
+    "LittleEndian": false,
+    "Checksum": "None",
+    "Fields": [
+      { "Name": "帧头", "Type": "Bytes", "Offset": 0, "Length": 1 },
+      { "Name": "帧长", "Type": "UInt16", "Offset": 1, "LittleEndian": false },
+      { "Name": "帧类型", "Type": "UInt8", "Offset": 3 },
+      { "Name": "设备ID", "Type": "Ascii", "Offset": 4, "Length": 8 },
+      { "Name": "CRC占位", "Type": "Bytes", "Offset": 12, "Length": 2 },
+      { "Name": "帧尾", "Type": "Bytes", "Offset": 14, "Length": 1 }
+    ]
+  },
+  {
+    "Name": "S06 唤醒 F_WAKEUP",
+    "MatchOffset": 3,
+    "MatchHex": "04",
+    "Mode": "LengthField",
+    "LengthOffset": 1,
+    "LengthSize": 2,
+    "LittleEndian": false,
+    "Checksum": "None",
+    "Fields": [
+      { "Name": "帧头", "Type": "Bytes", "Offset": 0, "Length": 1 },
+      { "Name": "帧长", "Type": "UInt16", "Offset": 1, "LittleEndian": false },
+      { "Name": "帧类型", "Type": "UInt8", "Offset": 3 },
+      { "Name": "设备ID", "Type": "Ascii", "Offset": 4, "Length": 8 },
+      { "Name": "电池", "Type": "UInt8", "Offset": 12, "Unit": "%" },
+      { "Name": "CRC占位", "Type": "Bytes", "Offset": 13, "Length": 2 },
+      { "Name": "帧尾", "Type": "Bytes", "Offset": 15, "Length": 1 }
+    ]
+  },
+  {
+    "Name": "S06 SOS 报警 F_SOS_ALARM",
+    "MatchOffset": 3,
+    "MatchHex": "05",
+    "Mode": "LengthField",
+    "LengthOffset": 1,
+    "LengthSize": 2,
+    "LittleEndian": false,
+    "Checksum": "None",
+    "Fields": [
+      { "Name": "帧头", "Type": "Bytes", "Offset": 0, "Length": 1 },
+      { "Name": "帧长", "Type": "UInt16", "Offset": 1, "LittleEndian": false },
+      { "Name": "帧类型", "Type": "UInt8", "Offset": 3 },
+      { "Name": "设备ID", "Type": "Ascii", "Offset": 4, "Length": 8 },
+      { "Name": "电话长度", "Type": "UInt8", "Offset": 12 },
+      { "Name": "电话", "Type": "Ascii", "Offset": 13, "LengthFromOffset": 12 },
+      { "Name": "分隔符", "Type": "Bytes", "Offset": 13, "OffsetFromLengthOffset": 12, "Length": 1 },
+      { "Name": "经度", "Type": "UInt32", "Offset": 14, "OffsetFromLengthOffset": 12, "LittleEndian": false, "Scale": 0.000001, "Unit": "°" },
+      { "Name": "纬度", "Type": "UInt32", "Offset": 18, "OffsetFromLengthOffset": 12, "LittleEndian": false, "Scale": 0.000001, "Unit": "°" },
+      { "Name": "CRC占位", "Type": "Bytes", "Offset": 22, "OffsetFromLengthOffset": 12, "Length": 2 },
+      { "Name": "帧尾", "Type": "Bytes", "Offset": 24, "OffsetFromLengthOffset": 12, "Length": 1 }
+    ]
+  },
+  {
+    "Name": "S06 SOS 来电 F_SOS_INCOMING",
+    "MatchOffset": 3,
+    "MatchHex": "06",
+    "Mode": "LengthField",
+    "LengthOffset": 1,
+    "LengthSize": 2,
+    "LittleEndian": false,
+    "Checksum": "None",
+    "Fields": [
+      { "Name": "帧头", "Type": "Bytes", "Offset": 0, "Length": 1 },
+      { "Name": "帧长", "Type": "UInt16", "Offset": 1, "LittleEndian": false },
+      { "Name": "帧类型", "Type": "UInt8", "Offset": 3 },
+      { "Name": "设备ID", "Type": "Ascii", "Offset": 4, "Length": 8 },
+      { "Name": "电话长度", "Type": "UInt8", "Offset": 12 },
+      { "Name": "电话", "Type": "Ascii", "Offset": 13, "LengthFromOffset": 12 },
+      { "Name": "分隔符", "Type": "Bytes", "Offset": 13, "OffsetFromLengthOffset": 12, "Length": 1 },
+      { "Name": "经度", "Type": "UInt32", "Offset": 14, "OffsetFromLengthOffset": 12, "LittleEndian": false, "Scale": 0.000001, "Unit": "°" },
+      { "Name": "纬度", "Type": "UInt32", "Offset": 18, "OffsetFromLengthOffset": 12, "LittleEndian": false, "Scale": 0.000001, "Unit": "°" },
+      { "Name": "CRC占位", "Type": "Bytes", "Offset": 22, "OffsetFromLengthOffset": 12, "Length": 2 },
+      { "Name": "帧尾", "Type": "Bytes", "Offset": 24, "OffsetFromLengthOffset": 12, "Length": 1 }
+    ]
+  }
+]

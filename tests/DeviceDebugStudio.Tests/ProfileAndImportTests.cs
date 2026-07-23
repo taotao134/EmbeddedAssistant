@@ -20,6 +20,10 @@ public sealed class ProfileAndImportTests
             TerminalEndpointColumnWidth = 184,
             TerminalSizeColumnWidth = 72,
             TerminalContentColumnWidth = 640,
+            FrameTimeColumnWidth = 88,
+            FrameLengthColumnWidth = 48,
+            FrameHexColumnWidth = 280,
+            FrameSummaryColumnWidth = 420,
             GitHubRepository = "acme/device-debug-studio",
             AutoUpdateEnabled = false
         };
@@ -32,12 +36,18 @@ public sealed class ProfileAndImportTests
         Assert.Equal(184, loaded.TerminalEndpointColumnWidth);
         Assert.Equal(72, loaded.TerminalSizeColumnWidth);
         Assert.Equal(640, loaded.TerminalContentColumnWidth);
+        Assert.Equal(88, loaded.FrameTimeColumnWidth);
+        Assert.Equal(48, loaded.FrameLengthColumnWidth);
+        Assert.Equal(280, loaded.FrameHexColumnWidth);
+        Assert.Equal(420, loaded.FrameSummaryColumnWidth);
         Assert.Equal("acme/device-debug-studio", loaded.GitHubRepository);
         Assert.False(loaded.AutoUpdateEnabled);
 
         AppSettings defaults = Assert.IsType<AppSettings>(JsonSerializer.Deserialize<AppSettings>("{}"));
         Assert.Equal(AppSettings.DefaultTerminalTimeColumnWidth, defaults.TerminalTimeColumnWidth);
         Assert.Equal(AppSettings.DefaultTerminalContentColumnWidth, defaults.TerminalContentColumnWidth);
+        Assert.Equal(AppSettings.DefaultFrameTimeColumnWidth, defaults.FrameTimeColumnWidth);
+        Assert.Equal(AppSettings.DefaultFrameSummaryColumnWidth, defaults.FrameSummaryColumnWidth);
         Assert.Equal(AppSettings.DefaultGitHubRepository, defaults.GitHubRepository);
         Assert.True(defaults.AutoUpdateEnabled);
     }
@@ -77,6 +87,22 @@ public sealed class ProfileAndImportTests
                     QuickCommandDataFormat = "ASCII",
                     SendRepeatIntervalMs = 250
                 },
+                FrameTemplates =
+                [
+                    new FrameTemplate
+                    {
+                        Name = "状态",
+                        MatchOffset = 3,
+                        MatchHex = "01",
+                        Fields = [new FrameField { Name = "状态码", Type = FrameFieldType.UInt8, Offset = 12 }]
+                    },
+                    new FrameTemplate
+                    {
+                        Name = "心跳",
+                        MatchOffset = 3,
+                        MatchHex = "00"
+                    }
+                ],
                 CommandGroups =
                 [
                     new QuickCommandGroup
@@ -107,6 +133,10 @@ public sealed class ProfileAndImportTests
             Assert.IsType<BleGattTransportSettings>(loaded.Transport);
             Assert.Equal("ASCII", loaded.Terminal.QuickCommandDataFormat);
             Assert.Equal(250, loaded.Terminal.SendRepeatIntervalMs);
+            Assert.Equal(2, loaded.FrameTemplates.Count);
+            Assert.Equal("状态", loaded.FrameTemplates[0].Name);
+            Assert.Equal("01", loaded.FrameTemplates[0].MatchHex);
+            Assert.Equal("状态码", loaded.FrameTemplates[0].Fields[0].Name);
             Assert.Equal("查询", loaded.CommandGroups[0].Commands[0].Name);
             Assert.Equal(12, loaded.CommandGroups[0].Commands[0].UsageCount);
             Assert.Equal(96, loaded.CommandGroups[0].Commands[0].NameColumnWeight);
@@ -187,6 +217,47 @@ public sealed class ProfileAndImportTests
     }
 
     [Fact]
+    public async Task NormalizesSscomControlSeparatorsWithoutDuplicatingCommas()
+    {
+        string directory = CreateTemporaryDirectory();
+        try
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            string path = Path.Combine(directory, "sscom51.ini");
+            await File.WriteAllTextAsync(
+                path,
+                "N20=A,$SETIP\u0002192\u0002168\u0002\u000210\r\nN21=A,$SETIP,\u0002192\u0002,168,\u00020,\u000210\r\n",
+                Encoding.GetEncoding(936));
+
+            LegacyImportResult result = await new LegacyConfigImporter().ImportFilesAsync([path]);
+            QuickCommand[] commands = Assert.Single(result.Profiles).CommandGroups[0].Commands.ToArray();
+
+            Assert.Equal("$SETIP,192,168,,10", commands[0].Payload);
+            Assert.Equal("$SETIP,192,168,0,10", commands[1].Payload);
+            Assert.DoesNotContain('\u0002', commands[0].Payload);
+            Assert.DoesNotContain('\u0002', commands[1].Payload);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public void NormalizesExistingQuickCommandBeforeEditingOrSending()
+    {
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Payload = "$SETIP,\u0002192\u0002,168,\u00020,\u000210",
+            Template = "$SETIP,\u0002192\u0002,168,\u00020,\u000210"
+        });
+
+        Assert.Equal("$SETIP,192,168,0,10", command.Payload);
+        Assert.Equal(command.Payload, command.TemplateOrPayload);
+        Assert.DoesNotContain('\u0002', command.ToModel().Payload);
+    }
+
+    [Fact]
     public void EditingQuickCommandPayloadUpdatesSentTemplate()
     {
         QuickCommandItemViewModel command = new(new QuickCommand
@@ -195,6 +266,19 @@ public sealed class ProfileAndImportTests
         });
 
         command.Payload = "$SETIP,192,168,0,10";
+
+        Assert.Equal(command.Payload, command.Template);
+        Assert.Equal(command.Payload, command.TemplateOrPayload);
+    }
+
+    [Fact]
+    public void MigratesStaleDirectTemplateToVisiblePayload()
+    {
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Payload = "$SETIP,192,168,0,10",
+            Template = "$SETIP19216811"
+        });
 
         Assert.Equal(command.Payload, command.Template);
         Assert.Equal(command.Payload, command.TemplateOrPayload);
