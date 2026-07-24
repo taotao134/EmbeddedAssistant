@@ -1,27 +1,31 @@
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $root = $PSScriptRoot
 $dotnet = (Get-Command dotnet -ErrorAction Stop).Source
+$solution = Join-Path $root 'DeviceDebugStudio.sln'
 $project = Join-Path $root 'src\DeviceDebugStudio.App\DeviceDebugStudio.App.csproj'
 $releaseRoot = Join-Path $root 'ReleasePackages'
-$publishDir = Join-Path $releaseRoot '嵌入式调试台-win-x64'
-$zipPath = Join-Path $releaseRoot '嵌入式调试台-win-x64.zip'
-$checksumPath = Join-Path $releaseRoot '嵌入式调试台-win-x64.zip.sha256'
+$appDisplayName = -join ([char[]](0x5D4C, 0x5165, 0x5F0F, 0x8C03, 0x8BD5, 0x53F0))
+$packageName = $appDisplayName + '-win-x64'
+$publishDir = Join-Path $releaseRoot $packageName
+$zipPath = Join-Path $releaseRoot ($packageName + '.zip')
+$checksumPath = Join-Path $releaseRoot ($packageName + '.zip.sha256')
 
 if (-not (Test-Path -LiteralPath $dotnet)) {
-    throw '未找到系统 .NET SDK。'
+    throw 'The .NET SDK was not found.'
 }
 
 Get-Process DeviceDebugStudio -ErrorAction SilentlyContinue | Stop-Process -Force
 
-& $dotnet test (Join-Path $root 'DeviceDebugStudio.sln') -c Release
+& $dotnet test $solution -c Release
 if ($LASTEXITCODE -ne 0) {
-    throw '自动化测试失败，已停止发布。'
+    throw 'Automated tests failed. Publishing was stopped.'
 }
 
 $resolvedRoot = [IO.Path]::GetFullPath($releaseRoot)
 $resolvedPublish = [IO.Path]::GetFullPath($publishDir)
 if (-not $resolvedPublish.StartsWith($resolvedRoot, [StringComparison]::OrdinalIgnoreCase)) {
-    throw '发布目录不在 ReleasePackages 内。'
+    throw 'The publish directory is outside ReleasePackages.'
 }
 
 if (Test-Path -LiteralPath $publishDir) {
@@ -31,7 +35,12 @@ New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
 
 & $dotnet publish $project -c Release -r win-x64 --self-contained true -o $publishDir /p:PublishSingleFile=false /p:PublishTrimmed=false
 if ($LASTEXITCODE -ne 0) {
-    throw '发布失败。'
+    throw 'dotnet publish failed.'
+}
+
+$publishedExe = Join-Path $publishDir 'DeviceDebugStudio.exe'
+if (-not (Test-Path -LiteralPath $publishedExe)) {
+    throw 'The published executable was not generated.'
 }
 
 if (Test-Path -LiteralPath $zipPath) {
@@ -41,6 +50,6 @@ Compress-Archive -Path (Join-Path $publishDir '*') -DestinationPath $zipPath -Co
 $checksum = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath $checksumPath -Value $checksum -Encoding ascii
 
-Write-Host "发布完成：$publishDir"
-Write-Host "压缩包：$zipPath"
-Write-Host "SHA-256：$checksumPath"
+Write-Host "Publish directory: $publishDir"
+Write-Host "Package: $zipPath"
+Write-Host "SHA-256 file: $checksumPath"
