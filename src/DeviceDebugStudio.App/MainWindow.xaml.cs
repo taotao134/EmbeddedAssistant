@@ -55,6 +55,7 @@ public partial class MainWindow : Window
     private int? _quickCommandDropInsertionIndex;
     private bool _terminalColumnDragActive;
     private double _terminalViewportWidth;
+    private int _terminalAutoScrollGeneration;
     private bool _frameColumnDragActive;
     private double _frameViewportWidth;
     private bool _updatePromptVisible;
@@ -116,48 +117,6 @@ public partial class MainWindow : Window
         _viewModel.UpdateAvailable += OnUpdateAvailable;
         UpdateTerminalColumnWidths();
         UpdateFrameColumnWidths();
-        Loaded += OnMainWindowLoaded;
-    }
-
-    private void OnMainWindowLoaded(object sender, RoutedEventArgs e)
-    {
-        Loaded -= OnMainWindowLoaded;
-        HookComboBoxDropDownEvents(this);
-    }
-
-    private static void HookComboBoxDropDownEvents(DependencyObject parent)
-    {
-        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
-        {
-            DependencyObject child = VisualTreeHelper.GetChild(parent, index);
-            if (child is ComboBox comboBox)
-            {
-                comboBox.DropDownOpened += OnComboBoxDropDownOpened;
-            }
-            HookComboBoxDropDownEvents(child);
-        }
-    }
-
-    private static void OnComboBoxDropDownOpened(object? sender, EventArgs e)
-    {
-        if (sender is not ComboBox comboBox)
-        {
-            return;
-        }
-
-        _ = comboBox.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
-        {
-            if (!comboBox.IsDropDownOpen
-                || comboBox.Template.FindName("PART_Popup", comboBox) is not Popup popup)
-            {
-                return;
-            }
-
-            popup.PlacementTarget = comboBox;
-            popup.Placement = PlacementMode.Bottom;
-            popup.HorizontalOffset = 0;
-            popup.VerticalOffset = 1;
-        }));
     }
 
     protected override void OnClosed(EventArgs e)
@@ -182,12 +141,7 @@ public partial class MainWindow : Window
     private void OnRecordsAppended(int count)
     {
         AppendTerminalPlainText(count);
-        if (_viewModel.AutoScroll
-            && TerminalDisplayTabs.SelectedItem == TerminalTableTab
-            && TerminalList.Items.Count > 0)
-        {
-            TerminalList.ScrollIntoView(TerminalList.Items[^1]);
-        }
+        QueueTerminalAutoScroll();
 
         UpdateTerminalColumnWidths();
     }
@@ -199,8 +153,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        QueueTerminalAutoScroll();
+    }
+
+    private void QueueTerminalAutoScroll()
+    {
+        int generation = ++_terminalAutoScrollGeneration;
+        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
         {
+            if (generation != _terminalAutoScrollGeneration || !_viewModel.AutoScroll)
+            {
+                return;
+            }
+
             if (TerminalDisplayTabs.SelectedItem == TerminalTableTab && TerminalList.Items.Count > 0)
             {
                 object lastItem = TerminalList.Items[^1];
@@ -214,7 +179,7 @@ public partial class MainWindow : Window
                 TerminalPlainTextBox.CaretIndex = TerminalPlainTextBox.Text.Length;
                 TerminalPlainTextBox.ScrollToEnd();
             }
-        });
+        }));
     }
 
     private void OnTerminalListSizeChanged(object sender, SizeChangedEventArgs e)

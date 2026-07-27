@@ -22,6 +22,7 @@ using DeviceDebugStudio.Infrastructure.Import;
 using DeviceDebugStudio.Infrastructure.Persistence;
 using DeviceDebugStudio.Infrastructure.Transports;
 using DeviceDebugStudio.Infrastructure.Updates;
+using Serilog;
 using Wpf.Ui.Appearance;
 
 namespace DeviceDebugStudio.App.ViewModels;
@@ -32,6 +33,7 @@ public sealed record FramingModeOption(FramingMode Mode, string Name, string Des
 
 public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
+    private const int MaximumTransportDiagnosticEventsPerSecond = 64;
     private static readonly IReadOnlyDictionary<string, string> EmptyVariables =
         new Dictionary<string, string>();
 
@@ -47,6 +49,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly List<TransportPacket> _serialTerminalBuffer = [];
     private readonly ConcurrentQueue<FrameRecordItem> _pendingFrames = new();
     private readonly ConcurrentQueue<double> _pendingChartValues = new();
+    private readonly object _transportDiagnosticLogLock = new();
     private readonly Dictionary<Guid, CancellationTokenSource> _repeatCommands = [];
     private CancellationTokenSource? _sendRepeatCancellation;
     private readonly object _decoderSync = new();
@@ -54,6 +57,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly DispatcherTimer _uiTimer;
     private readonly DispatcherTimer _profileSaveTimer;
     private readonly DispatcherTimer _appSettingsSaveTimer;
+    private readonly DispatcherTimer _connectionConfigurationTimer;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ModbusSlaveSimulator _modbusSlave = new();
     private CommunicationSession? _session;
@@ -66,9 +70,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private long _txTotal;
     private long _lastRateBytes;
     private DateTimeOffset _lastRateTimestamp = DateTimeOffset.Now;
+    private DateTimeOffset _transportDiagnosticWindowStart = DateTimeOffset.MinValue;
     private DateTimeOffset _nextPortRefresh = DateTimeOffset.Now.AddSeconds(2);
     private int _portRefreshRunning;
     private int _connectionWorkerRunning;
+    private int _connectionConfigurationRevision;
+    private int _connectedConfigurationRevision;
+    private int _transportDiagnosticEventCount;
+    private bool _transportDiagnosticSuppressionLogged;
+    private long _lastDisplayDropCount;
     private bool _manualDisconnect;
     private bool _connectionDesired;
     private CancellationTokenSource? _connectionAttemptCancellation;
@@ -111,7 +121,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         selectedQuickCommandSort = QuickCommandSortOptions[0];
         selectedQuickCommandDataFormat = QuickCommandDataFormats[0];
         selectedEncodingName = "UTF-8";
-        selectedLineEnding = "None";
+        selectedLineEnding = "CRLF";
         selectedSendChecksum = ChecksumKind.None;
         selectedFramingMode = FramingMode.Raw;
         frameTemplateJson = SerializeTemplate(_frameTemplate);
@@ -148,6 +158,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _lastAppSettingsSaveTask = SaveAppSettingsAsync();
             await _lastAppSettingsSaveTask.ConfigureAwait(true);
         };
+        _connectionConfigurationTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(250)
+        };
+        _connectionConfigurationTimer.Tick += OnConnectionConfigurationTimerTick;
 
         QuickCommandsView = CollectionViewSource.GetDefaultView(QuickCommands);
         QuickCommandsView.Filter = FilterQuickCommand;
@@ -513,6 +528,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             {
                 Name = "快速调试",
                 WorkspaceMode = WorkspaceMode.Serial,
+                Terminal = new TerminalPreferences { LineEnding = "CRLF" },
                 CommandGroups =
                 [
                     new QuickCommandGroup
@@ -925,6 +941,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _manualDisconnect = !_connectionDesired;
         if (!_connectionDesired)
         {
+            _connectionConfigurationTimer.Stop();
             SendRepeatEnabled = false;
             StopSendRepeat();
             _connectionAttemptCancellation?.Cancel();
@@ -951,7 +968,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         try
         {
-            _ = await SendPayloadAsync(SendText, SendAsHex, SelectedLineEnding, SelectedSendChecksum, ChecksumLittleEndian).ConfigureAwait(true);
+            Log.Information(
+                "底部发送命令已触发 | 已连接={IsConnected} | 可发送={CanSend} | 文本长度={TextLength}",
+                IsConnected,
+                CanSend,
+                SendText.Length);
+            _ = await SendPayloadAsync(
+                SendText,
+                SendAsHex,
+                SelectedLineEnding,
+                SelectedSendChecksum,
+                ChecksumLittleEndian,
+                source: "底部发送").ConfigureAwait(true);
         }
         finally
         {
@@ -997,7 +1025,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                     SelectedLineEnding,
                     SelectedSendChecksum,
                     ChecksumLittleEndian,
-                    updateStatus: false).ConfigureAwait(true);
+                    updateStatus: false,
+                    source: "底部循环发送").ConfigureAwait(true);
                 if (!sent)
                 {
                     failed = true;
@@ -1079,7 +1108,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             command.ChecksumLittleEndian,
             encoding,
             formatLabel,
-            BuildQuickCommandVariables(command)).ConfigureAwait(true);
+            BuildQuickCommandVariables(command),
+            source: $"快捷指令:{command.Name}").ConfigureAwait(true);
     }
 
     [RelayCommand(CanExecute = nameof(CanToggleQuickRepeat), AllowConcurrentExecutions = true)]
@@ -1510,6 +1540,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _uiTimer.Stop();
         _profileSaveTimer.Stop();
         _appSettingsSaveTimer.Stop();
+        _connectionConfigurationTimer.Stop();
         StopSendRepeat();
         CancellationTokenSource[] repeatSources = _repeatCommands.Values.ToArray();
         _repeatCommands.Clear();
@@ -1770,6 +1801,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             _connectionDesired = false;
             _manualDisconnect = true;
+            _connectionConfigurationTimer.Stop();
             _connectionAttemptCancellation?.Cancel();
             OnPropertyChanged(nameof(ConnectionButtonText));
             EnsureConnectionStateWorker();
@@ -1801,6 +1833,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         OnPropertyChanged(nameof(ConnectionSummary));
         ScheduleProfileSave();
+        ScheduleConnectionConfigurationApply();
     }
 
     partial void OnSelectedFramingModeChanged(FramingMode value) =>
@@ -1885,9 +1918,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         RefreshSendCommandAvailability();
     }
 
-    partial void OnPortNameChanged(string value) => OnPropertyChanged(nameof(ConnectionSummary));
-    partial void OnBaudRateChanged(int value) => OnPropertyChanged(nameof(ConnectionSummary));
+    partial void OnPortNameChanged(string value) => OnConnectionConfigurationChanged();
+    partial void OnBaudRateChanged(int value) => OnConnectionConfigurationChanged();
+    partial void OnDataBitsChanged(int value) => OnConnectionConfigurationChanged();
+    partial void OnSerialParityChanged(SerialParity value) => OnConnectionConfigurationChanged();
+    partial void OnSerialStopBitsChanged(SerialStopBits value) => OnConnectionConfigurationChanged();
+    partial void OnSerialHandshakeChanged(SerialHandshake value) => OnConnectionConfigurationChanged();
+    partial void OnDtrEnableChanged(bool value) => OnConnectionConfigurationChanged();
+    partial void OnRtsEnableChanged(bool value) => OnConnectionConfigurationChanged();
     partial void OnReceiveTimeoutMsChanged(int value) => ScheduleProfileSave();
+    partial void OnAutoReconnectChanged(bool value) => ScheduleProfileSave();
     partial void OnSendRepeatEnabledChanged(bool value) => UpdateSendRepeatState();
     partial void OnSendRepeatIntervalMsChanged(int value)
     {
@@ -1900,14 +1940,21 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         ScheduleProfileSave();
     }
-    partial void OnHostChanged(string value) => OnPropertyChanged(nameof(ConnectionSummary));
-    partial void OnRemotePortChanged(int value) => OnPropertyChanged(nameof(ConnectionSummary));
-    partial void OnLocalAddressChanged(string value) => OnPropertyChanged(nameof(ConnectionSummary));
-    partial void OnLocalPortChanged(int value) => OnPropertyChanged(nameof(ConnectionSummary));
+    partial void OnHostChanged(string value) => OnConnectionConfigurationChanged();
+    partial void OnRemotePortChanged(int value) => OnConnectionConfigurationChanged();
+    partial void OnLocalAddressChanged(string value) => OnConnectionConfigurationChanged();
+    partial void OnLocalPortChanged(int value) => OnConnectionConfigurationChanged();
+    partial void OnUdpBroadcastChanged(bool value) => OnConnectionConfigurationChanged();
+    partial void OnMulticastAddressChanged(string value) => OnConnectionConfigurationChanged();
+    partial void OnBleServiceUuidChanged(string value) => OnConnectionConfigurationChanged();
+    partial void OnBleReadUuidChanged(string value) => OnConnectionConfigurationChanged();
+    partial void OnBleWriteUuidChanged(string value) => OnConnectionConfigurationChanged();
+    partial void OnBleNotifyUuidChanged(string value) => OnConnectionConfigurationChanged();
+    partial void OnBleWriteWithoutResponseChanged(bool value) => OnConnectionConfigurationChanged();
 
     partial void OnSelectedBleDeviceChanged(BleDeviceInfo? value)
     {
-        OnPropertyChanged(nameof(ConnectionSummary));
+        OnConnectionConfigurationChanged();
     }
 
     partial void OnIsConnectedChanged(bool value)
@@ -1954,6 +2001,36 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         view.Refresh();
     }
 
+    private void OnConnectionConfigurationChanged()
+    {
+        OnPropertyChanged(nameof(ConnectionSummary));
+        ScheduleProfileSave();
+        ScheduleConnectionConfigurationApply();
+    }
+
+    private void ScheduleConnectionConfigurationApply()
+    {
+        if (_connectionDesired && Volatile.Read(ref _disposed) == 0)
+        {
+            _connectionConfigurationTimer.Stop();
+            _connectionConfigurationTimer.Start();
+        }
+    }
+
+    private void OnConnectionConfigurationTimerTick(object? sender, EventArgs args)
+    {
+        _connectionConfigurationTimer.Stop();
+        if (!_connectionDesired || Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _connectionConfigurationRevision);
+        StatusText = "正在应用新配置…";
+        _connectionAttemptCancellation?.Cancel();
+        EnsureConnectionStateWorker();
+    }
+
     private void EnsureConnectionStateWorker()
     {
         if (Interlocked.CompareExchange(ref _connectionWorkerRunning, 1, 0) == 0)
@@ -1962,12 +2039,26 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private bool NeedsConnectionStateProcessing() =>
+        _connectionDesired != IsConnected
+        || (!_connectionDesired && _session is not null)
+        || (_connectionDesired
+            && IsConnected
+            && Volatile.Read(ref _connectedConfigurationRevision) != Volatile.Read(ref _connectionConfigurationRevision));
+
     private async Task ProcessConnectionStateAsync()
     {
         try
         {
-            while (_connectionDesired != IsConnected || (!_connectionDesired && _session is not null))
+            while (NeedsConnectionStateProcessing())
             {
+                if (_connectionDesired
+                    && IsConnected
+                    && Volatile.Read(ref _connectedConfigurationRevision) != Volatile.Read(ref _connectionConfigurationRevision))
+                {
+                    await DisconnectSessionAsync("正在应用新配置…").ConfigureAwait(true);
+                    continue;
+                }
                 if (_connectionDesired && !IsConnected && _session is not null)
                 {
                     await DisconnectInternalAsync().ConfigureAwait(true);
@@ -1992,7 +2083,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         finally
         {
             Interlocked.Exchange(ref _connectionWorkerRunning, 0);
-            if (_connectionDesired != IsConnected || (!_connectionDesired && _session is not null))
+            if (NeedsConnectionStateProcessing())
             {
                 EnsureConnectionStateWorker();
             }
@@ -2008,6 +2099,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         try
         {
             WorkspaceMode connectingWorkspace = SelectedWorkspaceMode.Mode;
+            int configurationRevision = Volatile.Read(ref _connectionConfigurationRevision);
             TransportSettings settings = BuildTransportSettings();
             ITransport transport = TransportFactory.Create(settings);
             SqliteCaptureStore capture = new();
@@ -2030,6 +2122,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             CommunicationSession activeSession = _session;
             _consumeTask = Task.Run(() => ConsumeSessionAsync(activeSession, _consumeCancellation.Token), CancellationToken.None);
             _connectedWorkspaceMode = connectingWorkspace;
+            Volatile.Write(ref _connectedConfigurationRevision, configurationRevision);
+            _lastDisplayDropCount = 0;
             IsConnected = true;
             StatusText = $"已连接：{transport.DisplayName}";
         }
@@ -2087,6 +2181,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         await foreach (TransportPacket packet in session.ReadDisplayAsync(cancellationToken).ConfigureAwait(false))
         {
+            LogReceivedTransportPacket(packet);
             if (packet.Direction == PacketDirection.Receive)
             {
                 Interlocked.Add(ref _rxTotal, packet.Data.Length);
@@ -2208,8 +2303,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Encoding? textEncoding = null,
         string? formatLabel = null,
         IReadOnlyDictionary<string, string>? variables = null,
-        bool updateStatus = true)
+        bool updateStatus = true,
+        string source = "发送")
     {
+        byte[]? final = null;
         try
         {
             if (!CanUseConnectedSession)
@@ -2225,14 +2322,21 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             byte[] withEnding = new byte[data.Length + ending.Length];
             data.CopyTo(withEnding, 0);
             ending.CopyTo(withEnding, data.Length);
-            byte[] final = ChecksumCalculator.Append(withEnding, checksum, littleEndian);
+            final = ChecksumCalculator.Append(withEnding, checksum, littleEndian);
             if (final.Length == 0)
             {
                 StatusText = "发送内容为空";
+                Log.Warning("通信发送内容为空 | 来源={Source}", source);
                 return false;
             }
             CommunicationSession session = _session ?? throw new InvalidOperationException("请先建立连接。 ");
             await session.SendAsync(final, sentAsHex: isHex).ConfigureAwait(true);
+            LogTransportDiagnostic(
+                PacketDirection.Send,
+                source,
+                session.Transport.DisplayName,
+                final,
+                $"格式={formatLabel ?? (isHex ? "HEX" : textEncoding?.WebName ?? GetSelectedEncoding().WebName)}，行尾={lineEnding}，校验={checksum}");
             if (updateStatus)
             {
                 StatusText = $"已发送 {final.Length} 字节（{formatLabel ?? (isHex ? "HEX 输入" : "文本输入")}）";
@@ -2242,11 +2346,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         catch (OperationCanceledException)
         {
             StatusText = "发送已取消，连接状态已变化";
+            Log.Warning("通信发送已取消 | 来源={Source}", source);
             return false;
         }
         catch (Exception exception) when (exception is FormatException or InvalidOperationException or IOException or ArgumentException)
         {
             StatusText = $"发送失败：{exception.Message}";
+            Log.Error(
+                exception,
+                "通信发送失败 | 来源={Source} | HEX={Hex}",
+                source,
+                FormatTransportDiagnosticData(final ?? []));
             return false;
         }
     }
@@ -2353,6 +2463,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         ReceivedBytes = Interlocked.Read(ref _rxTotal);
         SentBytes = Interlocked.Read(ref _txTotal);
+        long displayDropCount = _session?.DisplayDropCount ?? 0;
+        if (displayDropCount > _lastDisplayDropCount)
+        {
+            Log.Warning(
+                "通信显示队列发生丢包 | 本次新增={Dropped} | 累计={Total}",
+                displayDropCount - _lastDisplayDropCount,
+                displayDropCount);
+            _lastDisplayDropCount = displayDropCount;
+        }
         DateTimeOffset now = DateTimeOffset.Now;
         if (SelectedFramingMode == FramingMode.IdleGap && !_idleGapFlushed && now - _lastFrameInput >= TimeSpan.FromMilliseconds(Math.Max(1, IdleGapMs)))
         {
@@ -2879,6 +2998,89 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         QuickCommandDataFormats.FirstOrDefault(
             item => string.Equals(item, value, StringComparison.OrdinalIgnoreCase))
         ?? QuickCommandDataFormats[0];
+
+    private void LogReceivedTransportPacket(TransportPacket packet)
+    {
+        if (packet.Direction is PacketDirection.Send or PacketDirection.Receive)
+        {
+            LogTransportDiagnostic(
+                packet.Direction,
+                packet.Direction == PacketDirection.Send ? "会话发送确认" : "传输接收",
+                packet.Endpoint,
+                packet.Data,
+                packet.SentAsHex is null ? null : $"HEX输入={packet.SentAsHex.Value}");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(packet.Message))
+        {
+            Log.Warning(
+                "通信状态消息 | 类型={Direction} | 端点={Endpoint} | 内容={Message}",
+                packet.Direction,
+                packet.Endpoint,
+                packet.Message);
+        }
+    }
+
+    private void LogTransportDiagnostic(
+        PacketDirection direction,
+        string source,
+        string endpoint,
+        ReadOnlySpan<byte> data,
+        string? detail = null)
+    {
+        bool shouldLog;
+        bool suppressionStarted = false;
+        lock (_transportDiagnosticLogLock)
+        {
+            DateTimeOffset now = DateTimeOffset.Now;
+            if (now - _transportDiagnosticWindowStart >= TimeSpan.FromSeconds(1))
+            {
+                _transportDiagnosticWindowStart = now;
+                _transportDiagnosticEventCount = 0;
+                _transportDiagnosticSuppressionLogged = false;
+            }
+
+            shouldLog = _transportDiagnosticEventCount < MaximumTransportDiagnosticEventsPerSecond;
+            if (shouldLog)
+            {
+                _transportDiagnosticEventCount++;
+            }
+            else if (!_transportDiagnosticSuppressionLogged)
+            {
+                _transportDiagnosticSuppressionLogged = true;
+                suppressionStarted = true;
+            }
+        }
+
+        if (suppressionStarted)
+        {
+            Log.Warning(
+                "通信诊断日志已限流 | 每秒最多记录 {Maximum} 条收发事件",
+                MaximumTransportDiagnosticEventsPerSecond);
+        }
+        if (!shouldLog)
+        {
+            return;
+        }
+
+        Log.Information(
+            "通信{Direction} | 来源={Source} | 端点={Endpoint} | 字节={ByteCount} | HEX={Hex} | {Detail}",
+            direction == PacketDirection.Send ? "发送" : "接收",
+            source,
+            endpoint,
+            data.Length,
+            FormatTransportDiagnosticData(data),
+            detail ?? "无附加参数");
+    }
+
+    private static string FormatTransportDiagnosticData(ReadOnlySpan<byte> data)
+    {
+        const int maximumBytes = 160;
+        return data.Length <= maximumBytes
+            ? ByteText.ToHex(data)
+            : $"{ByteText.ToHex(data[..maximumBytes])} …（总计 {data.Length} 字节）";
+    }
 
     private string NormalizeHexInput(string value)
     {

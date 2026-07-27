@@ -25,6 +25,9 @@
     <Window.Resources>
         <converters:TerminalDisplayTextConverter x:Key="TerminalDisplayTextConverter" />
         <Style x:Key="SeparatedHorizontalScrollViewerStyle" TargetType="{x:Type ScrollViewer}">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="IsTabStop" Value="False" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="{x:Type ScrollViewer}">
@@ -112,31 +115,31 @@
     </Window.Resources>
     <Grid Background="{DynamicResource WorkspaceBackgroundBrush}">
         <Grid.RowDefinitions>
-            <RowDefinition Height="44" />
+            <RowDefinition Height="36" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="26" />
+            <RowDefinition Height="22" />
         </Grid.RowDefinitions>
 
         <Border Grid.Row="0"
                 Background="{DynamicResource PanelBackgroundBrush}"
                 BorderBrush="{DynamicResource DividerBrush}"
                 BorderThickness="0,0,0,1">
-            <DockPanel Margin="12,0">
+            <DockPanel Margin="10,0">
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                    <ui:SymbolIcon Width="22"
-                                   Height="22"
+                    <ui:SymbolIcon Width="18"
+                                   Height="18"
                                    VerticalAlignment="Center"
                                    Symbol="DeveloperBoard24"
-                                   FontSize="20"
+                                   FontSize="16"
                                    Foreground="{DynamicResource ButtonForegroundBrush}" />
-                    <TextBlock Margin="7,0,0,0"
+                    <TextBlock Margin="6,0,0,0"
                                VerticalAlignment="Center"
-                               FontSize="16"
+                               FontSize="13"
                                FontWeight="Normal"
                                Foreground="{DynamicResource ButtonForegroundBrush}"
                                Text="嵌入式调试台" />
-                    <Border Margin="7,0,0,0"
-                            Padding="6,2"
+                    <Border Margin="6,0,0,0"
+                            Padding="5,1"
                             VerticalAlignment="Center"
                             Background="{DynamicResource SidebarBackgroundBrush}"
                             BorderBrush="{DynamicResource DividerBrush}"
@@ -148,15 +151,15 @@
                                    Foreground="{DynamicResource MutedTextBrush}"
                                    Text="{Binding ApplicationVersionText}" />
                     </Border>
-                    <Border Margin="10,0,0,0"
-                            Padding="7,3"
+                    <Border Margin="8,0,0,0"
+                            Padding="6,2"
                             VerticalAlignment="Center"
                             Background="{DynamicResource SidebarBackgroundBrush}"
                             BorderBrush="{DynamicResource DividerBrush}"
                             BorderThickness="1"
-                            CornerRadius="6">
+                            CornerRadius="5">
                         <TextBlock VerticalAlignment="Center"
-                                   FontSize="12"
+                                   FontSize="11"
                                    Foreground="{DynamicResource MutedTextBrush}"
                                    Text="{Binding ConnectionSummary}" />
                     </Border>
@@ -164,24 +167,24 @@
 
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Style="{StaticResource IconButtonStyle}" ToolTip="显示或隐藏设备面板" Click="OnToggleDevicePanelClick">
-                        <ui:SymbolIcon Symbol="PanelLeft20" Width="17" Height="17" FontSize="17" />
+                        <ui:SymbolIcon Symbol="PanelLeft20" Width="15" Height="15" FontSize="15" />
                     </Button>
                     <Button Style="{StaticResource IconButtonStyle}" ToolTip="切换主题" Click="OnToggleThemeClick">
-                        <ui:SymbolIcon Symbol="DarkTheme20" Width="17" Height="17" FontSize="17" />
+                        <ui:SymbolIcon Symbol="DarkTheme20" Width="15" Height="15" FontSize="15" />
                     </Button>
                     <Button Style="{StaticResource IconButtonStyle}" ToolTip="显示或隐藏命令面板" Click="OnToggleCommandPanelClick">
-                        <ui:SymbolIcon Symbol="PanelRight20" Width="17" Height="17" FontSize="17" />
+                        <ui:SymbolIcon Symbol="PanelRight20" Width="15" Height="15" FontSize="15" />
                     </Button>
                     <Button Style="{StaticResource IconButtonStyle}" ToolTip="打开捕获数据库" Click="OnOpenCaptureClick">
-                        <ui:SymbolIcon Symbol="FolderOpen20" Width="17" Height="17" FontSize="17" />
+                        <ui:SymbolIcon Symbol="FolderOpen20" Width="15" Height="15" FontSize="15" />
                     </Button>
                     <Button Style="{StaticResource IconButtonStyle}"
                             ToolTip="检查 GitHub 更新"
                             Click="OnCheckForUpdatesClick">
-                        <ui:SymbolIcon Symbol="ArrowSync20" Width="17" Height="17" FontSize="17" />
+                        <ui:SymbolIcon Symbol="ArrowSync20" Width="15" Height="15" FontSize="15" />
                     </Button>
                     <Button Style="{StaticResource IconButtonStyle}" ToolTip="设置" Click="OnOpenSettingsClick">
-                        <ui:SymbolIcon Symbol="Settings20" Width="17" Height="17" FontSize="17" />
+                        <ui:SymbolIcon Symbol="Settings20" Width="15" Height="15" FontSize="15" />
                     </Button>
                 </StackPanel>
             </DockPanel>
@@ -356,7 +359,7 @@
                 </Grid.RowDefinitions>
 
                 <Border Grid.Row="0"
-                        Padding="8,5"
+                        Padding="8,3"
                         Background="{DynamicResource PanelBackgroundBrush}"
                         BorderBrush="{DynamicResource DividerBrush}"
                         BorderThickness="0,0,0,1">
@@ -373,10 +376,10 @@
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-                                <Setter Property="MinWidth" Value="104" />
-                                <Setter Property="Height" Value="34" />
-                                <Setter Property="Margin" Value="0,0,5,0" />
-                                <Setter Property="Padding" Value="8,4" />
+                                <Setter Property="MinWidth" Value="0" />
+                                <Setter Property="Height" Value="26" />
+                                <Setter Property="Margin" Value="0,0,4,0" />
+                                <Setter Property="Padding" Value="8,2" />
                                 <Setter Property="Background" Value="{DynamicResource ButtonSurfaceBrush}" />
                                 <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundBrush}" />
                                 <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
@@ -390,7 +393,7 @@
                                                     Background="{TemplateBinding Background}"
                                                     BorderBrush="{TemplateBinding BorderBrush}"
                                                     BorderThickness="{TemplateBinding BorderThickness}"
-                                                    CornerRadius="6"
+                                                    CornerRadius="5"
                                                     SnapsToDevicePixels="True">
                                                 <ContentPresenter Margin="{TemplateBinding Padding}"
                                                                   HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
@@ -415,7 +418,7 @@
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <ui:SymbolIcon Width="16" Height="16" Margin="0,0,7,0" FontSize="16">
+                                    <ui:SymbolIcon Width="13" Height="13" Margin="0,0,4,0" FontSize="13">
                                         <ui:SymbolIcon.Style>
                                             <Style TargetType="ui:SymbolIcon">
                                                 <Setter Property="Symbol" Value="SerialPort20" />
@@ -433,7 +436,7 @@
                                             </Style>
                                         </ui:SymbolIcon.Style>
                                     </ui:SymbolIcon>
-                                    <TextBlock VerticalAlignment="Center" FontSize="11" FontWeight="Normal" Text="{Binding Name}" />
+                                    <TextBlock VerticalAlignment="Center" FontSize="10" FontWeight="Normal" Text="{Binding Name}" />
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -441,7 +444,7 @@
                 </Border>
 
                 <Border Grid.Row="1"
-                        MinHeight="50"
+                        MinHeight="52"
                         Padding="8,2"
                         Background="{DynamicResource PanelBackgroundBrush}"
                         BorderBrush="{DynamicResource DividerBrush}"
@@ -475,20 +478,13 @@
                                       VerticalScrollBarVisibility="Disabled"
                                       PanningMode="HorizontalOnly">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <StackPanel.Style>
-                                    <Style TargetType="StackPanel">
-                                        <Setter Property="IsEnabled" Value="True" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsConnected}" Value="True">
-                                                <Setter Property="IsEnabled" Value="False" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </StackPanel.Style>
-                                <StackPanel Width="100" Margin="0,0,4,0">
+                                <StackPanel Width="100" Height="39" Margin="0,0,4,0" VerticalAlignment="Top">
                                     <StackPanel.Style>
                                         <Style TargetType="StackPanel">
                                             <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSerialWorkspace}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsModbusWorkspace}" Value="True">
                                                     <Setter Property="Visibility" Value="Collapsed" />
                                                 </DataTrigger>
@@ -501,7 +497,7 @@
                                               ItemsSource="{Binding AvailableTransportOptions}"
                                               SelectedItem="{Binding SelectedTransportOption}"
                                               DisplayMemberPath="Name"
-                                              ToolTip="TCP 客户端主动连接服务器；TCP 服务器监听本地端口；UDP 无连接收发数据。也可切换串口或蓝牙。" />
+                                              ToolTip="传输方式：串口、TCP 客户端、TCP 服务器、UDP、BLE 等；切换后下方参数栏会随之变化。" />
                                 </StackPanel>
 
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -518,7 +514,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
-                                <StackPanel Width="76" Margin="0,0,2,0">
+                                <StackPanel Width="148" Height="39" Margin="0,0,2,0" VerticalAlignment="Top">
                                     <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text="串口" />
                                     <ComboBox Height="24"
                                               Style="{StaticResource ConnectionComboBoxStyle}"
@@ -528,27 +524,43 @@
                                               DisplayMemberPath="CompactDisplayName"
                                               ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}" />
                                 </StackPanel>
-                                <StackPanel Width="24" Margin="0,0,2,0">
+                                <StackPanel Width="24" Height="39" Margin="0,0,2,0" VerticalAlignment="Top">
                                     <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text=" " />
                                     <Button Margin="0" Style="{StaticResource CompactIconButtonStyle}" ToolTip="刷新串口" Command="{Binding RefreshPortsCommand}">
                                         <ui:SymbolIcon Symbol="ArrowSync20" FontSize="14" />
                                     </Button>
                                 </StackPanel>
-                                <StackPanel Width="88" Margin="2,0,4,0">
+                                <StackPanel Width="88" Height="39" Margin="2,0,4,0" VerticalAlignment="Top">
                                     <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text="波特率" />
                                     <ComboBox Height="24"
                                               Style="{StaticResource ConnectionComboBoxStyle}"
                                               IsEditable="True"
                                               ItemsSource="{Binding BaudRates}"
-                                              Text="{Binding BaudRate}" />
+                                              Text="{Binding BaudRate, UpdateSourceTrigger=PropertyChanged}" />
                                 </StackPanel>
-                                <StackPanel Width="76" Margin="0,0,3,0">
+                                <StackPanel Height="39" Margin="0,0,6,0" VerticalAlignment="Top">
                                     <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text=" " />
-                                    <CheckBox Height="24" VerticalAlignment="Top" FontSize="10" Content="DTR" IsChecked="{Binding DtrEnable}" />
+                                    <CheckBox Height="24"
+                                              MinWidth="0"
+                                              Margin="0"
+                                              Padding="0"
+                                              HorizontalContentAlignment="Left"
+                                              VerticalAlignment="Top"
+                                              FontSize="10"
+                                              Content="DTR"
+                                              IsChecked="{Binding DtrEnable}" />
                                 </StackPanel>
-                                <StackPanel Width="76" Margin="0,0,5,0">
+                                <StackPanel Height="39" Margin="0" VerticalAlignment="Top">
                                     <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text=" " />
-                                    <CheckBox Height="24" VerticalAlignment="Top" FontSize="10" Content="RTS" IsChecked="{Binding RtsEnable}" />
+                                    <CheckBox Height="24"
+                                              MinWidth="0"
+                                              Margin="0"
+                                              Padding="0"
+                                              HorizontalContentAlignment="Left"
+                                              VerticalAlignment="Top"
+                                              FontSize="10"
+                                              Content="RTS"
+                                              IsChecked="{Binding RtsEnable}" />
                                 </StackPanel>
                             </StackPanel>
 
@@ -566,7 +578,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
-                                <StackPanel Width="140" Margin="0,0,5,0">
+                                <StackPanel Width="140" Height="39" Margin="0,0,5,0" VerticalAlignment="Top">
                                     <TextBlock>
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock" BasedOn="{StaticResource ConnectionFieldLabelStyle}">
@@ -584,7 +596,7 @@
                                              Text="{Binding Host, UpdateSourceTrigger=PropertyChanged}"
                                              ToolTip="TCP 服务器或 UDP 目标的 IP 地址、主机名" />
                                 </StackPanel>
-                                <StackPanel Width="64" Margin="0,0,6,0">
+                                <StackPanel Width="64" Height="39" Margin="0,0,6,0" VerticalAlignment="Top">
                                     <TextBlock>
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock" BasedOn="{StaticResource ConnectionFieldLabelStyle}">
@@ -599,7 +611,7 @@
                                     </TextBlock>
                                     <TextBox Height="24"
                                              Style="{StaticResource ConnectionTextBoxStyle}"
-                                             Text="{Binding RemotePort}"
+                                             Text="{Binding RemotePort, UpdateSourceTrigger=PropertyChanged}"
                                              ToolTip="TCP 服务器或 UDP 目标的端口号" />
                                 </StackPanel>
                             </StackPanel>
@@ -618,7 +630,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
-                                <StackPanel Width="112" Margin="0,0,5,0">
+                                <StackPanel Width="112" Height="39" Margin="0,0,5,0" VerticalAlignment="Top">
                                     <TextBlock>
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock" BasedOn="{StaticResource ConnectionFieldLabelStyle}">
@@ -633,10 +645,10 @@
                                     </TextBlock>
                                     <TextBox Height="24"
                                              Style="{StaticResource ConnectionTextBoxStyle}"
-                                             Text="{Binding LocalAddress}"
+                                             Text="{Binding LocalAddress, UpdateSourceTrigger=PropertyChanged}"
                                              ToolTip="TCP 服务端绑定的本机 IP；0.0.0.0 表示监听所有网卡" />
                                 </StackPanel>
-                                <StackPanel Width="64" Margin="0,0,6,0">
+                                <StackPanel Width="64" Height="39" Margin="0,0,6,0" VerticalAlignment="Top">
                                     <TextBlock>
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock" BasedOn="{StaticResource ConnectionFieldLabelStyle}">
@@ -651,12 +663,12 @@
                                     </TextBlock>
                                     <TextBox Height="24"
                                              Style="{StaticResource ConnectionTextBoxStyle}"
-                                             Text="{Binding LocalPort}"
+                                             Text="{Binding LocalPort, UpdateSourceTrigger=PropertyChanged}"
                                              ToolTip="本机绑定或监听的端口号" />
                                 </StackPanel>
                             </StackPanel>
 
-                            <StackPanel Orientation="Horizontal">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -667,7 +679,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
-                                <StackPanel Width="210" Margin="0,0,4,0">
+                                <StackPanel Width="210" Height="39" Margin="0,0,4,0" VerticalAlignment="Top">
                                     <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text="蓝牙设备" />
                                     <ComboBox Height="24"
                                               Style="{StaticResource ConnectionComboBoxStyle}"
@@ -675,7 +687,7 @@
                                               SelectedItem="{Binding SelectedBleDevice}"
                                               DisplayMemberPath="DisplayName" />
                                 </StackPanel>
-                                <StackPanel Width="24">
+                                <StackPanel Width="24" Height="39" VerticalAlignment="Top">
                                     <TextBlock Style="{StaticResource ConnectionFieldLabelStyle}" Text=" " />
                                     <Button Margin="0" Style="{StaticResource CompactIconButtonStyle}" ToolTip="扫描 BLE" Command="{Binding ScanBleCommand}">
                                         <ui:SymbolIcon Symbol="BluetoothSearching20" Width="14" Height="14" />
@@ -694,7 +706,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                                 <RowDefinition Height="8" />
-                                <RowDefinition Height="110" MinHeight="110" MaxHeight="330" />
+                                <RowDefinition Height="126" MinHeight="126" MaxHeight="346" />
                             </Grid.RowDefinitions>
 
                             <Grid Margin="0,0,0,6">
@@ -929,6 +941,7 @@
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
                                         <RowDefinition Height="*" />
                                     </Grid.RowDefinitions>
                                     <Grid.ColumnDefinitions>
@@ -938,10 +951,13 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <ComboBox Grid.Column="0" Height="24" Margin="0,0,4,4" Style="{StaticResource ConnectionComboBoxStyle}" ItemsSource="{Binding EncodingNames}" SelectedItem="{Binding SelectedEncodingName}" />
-                                    <ComboBox Grid.Column="1" Height="24" Margin="0,0,4,4" Style="{StaticResource ConnectionComboBoxStyle}" ItemsSource="{Binding LineEndings}" SelectedItem="{Binding SelectedLineEnding}" />
-                                    <ComboBox Grid.Column="2" Height="24" Margin="0,0,4,4" Style="{StaticResource ConnectionComboBoxStyle}" ItemsSource="{Binding ChecksumKinds}" SelectedItem="{Binding SelectedSendChecksum}" />
-                                    <StackPanel Grid.Column="3" Margin="0,0,4,4" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                    <TextBlock Grid.Column="0" Style="{StaticResource ConnectionFieldLabelStyle}" Text="编码" />
+                                    <TextBlock Grid.Column="1" Style="{StaticResource ConnectionFieldLabelStyle}" Text="换行符" />
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ConnectionFieldLabelStyle}" Text="校验" />
+                                    <ComboBox Grid.Row="1" Grid.Column="0" Height="24" Margin="0,0,4,4" Style="{StaticResource ConnectionComboBoxStyle}" ItemsSource="{Binding EncodingNames}" SelectedItem="{Binding SelectedEncodingName}" />
+                                    <ComboBox Grid.Row="1" Grid.Column="1" Height="24" Margin="0,0,4,4" Style="{StaticResource ConnectionComboBoxStyle}" ItemsSource="{Binding LineEndings}" SelectedItem="{Binding SelectedLineEnding}" />
+                                    <ComboBox Grid.Row="1" Grid.Column="2" Height="24" Margin="0,0,4,4" Style="{StaticResource ConnectionComboBoxStyle}" ItemsSource="{Binding ChecksumKinds}" SelectedItem="{Binding SelectedSendChecksum}" />
+                                    <StackPanel Grid.Row="1" Grid.Column="3" Margin="0,0,4,4" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
                                         <ui:ToggleSwitch Height="24" Margin="0,0,8,0" FontSize="10" Content="HEX 发送" IsChecked="{Binding SendAsHex}" ToolTip="开启后按十六进制字节解析发送框内容" />
                                         <ui:ToggleSwitch Height="24"
                                                          Margin="0,0,4,0"
@@ -981,7 +997,8 @@
                                             <TextBlock Margin="2,0,0,0" VerticalAlignment="Center" FontSize="10" Text="ms" />
                                         </StackPanel>
                                     </StackPanel>
-                                    <Button Grid.Column="4"
+                                    <Button Grid.Row="1"
+                                            Grid.Column="4"
                                             MinWidth="86"
                                             Height="26"
                                             Margin="6,0,0,4"
@@ -994,8 +1011,8 @@
                                             <TextBlock Text="发送文件" />
                                         </StackPanel>
                                     </Button>
-                                    <TextBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" MinHeight="52" Padding="7,5" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Text="{Binding SendText, UpdateSourceTrigger=PropertyChanged}" />
-                                    <Button Grid.Row="1" Grid.Column="4" Height="52" Margin="6,0,0,0" VerticalAlignment="Bottom" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding SendCommand}">
+                                    <TextBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="4" MinHeight="52" Padding="7,5" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Text="{Binding SendText, UpdateSourceTrigger=PropertyChanged}" />
+                                    <Button Grid.Row="2" Grid.Column="4" Height="52" Margin="6,0,0,0" VerticalAlignment="Bottom" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding SendCommand}">
                                         <StackPanel Orientation="Horizontal">
                                             <ui:SymbolIcon Width="14" Height="14" Margin="0,0,3,0" Symbol="Send20" />
                                             <TextBlock Text="发送" />
@@ -1022,7 +1039,7 @@
                                         <TextBlock Style="{StaticResource FrameOptionLabelStyle}" Text="方式" />
                                         <ComboBox Height="24"
                                                   MinHeight="24"
-                                                  Padding="5,0"
+                                                  Padding="5,3"
                                                   FontSize="10"
                                                   Style="{StaticResource ConnectionComboBoxStyle}"
                                                   ItemsSource="{Binding FramingModes}"
@@ -1242,7 +1259,7 @@
                             <WrapPanel Margin="0,0,0,8">
                                 <TextBlock Margin="0,0,4,0" VerticalAlignment="Center" Text="站号" />
                                 <TextBox Width="55" Margin="0,0,8,0" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding ModbusUnitId}" />
-                                <ComboBox Width="150" Margin="0,0,8,0" ItemsSource="{Binding ModbusFunctions}" SelectedItem="{Binding SelectedModbusFunction}" />
+                                <ComboBox Width="150" Margin="0,0,8,0" VerticalContentAlignment="Stretch" ItemsSource="{Binding ModbusFunctions}" SelectedItem="{Binding SelectedModbusFunction}" />
                                 <TextBlock Margin="0,0,4,0" VerticalAlignment="Center" Text="地址" />
                                 <TextBox Width="70" Margin="0,0,8,0" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding ModbusAddress}" />
                                 <TextBlock Margin="0,0,4,0" VerticalAlignment="Center" Text="数量/值" />
@@ -1386,8 +1403,9 @@
                         <ComboBox Width="108"
                                   Height="24"
                                   Margin="5,0,0,0"
-                                  Padding="5,1"
+                                  Padding="5,3"
                                   FontSize="10"
+                                  VerticalContentAlignment="Stretch"
                                   FocusVisualStyle="{x:Null}"
                                   ItemsSource="{Binding QuickCommandDataFormats}"
                                   SelectedItem="{Binding SelectedQuickCommandDataFormat}"
@@ -1415,8 +1433,9 @@
                         <ComboBox Grid.Column="1"
                                   Height="26"
                                   MinHeight="26"
-                                  Padding="5,1"
+                                  Padding="5,3"
                                   FontSize="10"
+                                  VerticalContentAlignment="Stretch"
                                   FocusVisualStyle="{x:Null}"
                                   ItemsSource="{Binding QuickCommandSortOptions}"
                                   SelectedItem="{Binding SelectedQuickCommandSort}"
@@ -1983,7 +2002,7 @@
                                                           MinWidth="0"
                                                           Style="{StaticResource ConnectionComboBoxStyle}"
                                                           Margin="1,0"
-                                                          Padding="2,0"
+                                                          Padding="2,3"
                                                           FontSize="10"
                                                           FocusVisualStyle="{x:Null}"
                                                           ItemsSource="{Binding DataContext.LineEndings, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -1993,7 +2012,7 @@
                                                           MinWidth="0"
                                                           Style="{StaticResource ConnectionComboBoxStyle}"
                                                           Margin="1,0"
-                                                          Padding="2,0"
+                                                          Padding="2,3"
                                                           FontSize="10"
                                                           FocusVisualStyle="{x:Null}"
                                                           ItemsSource="{Binding DataContext.ChecksumKinds, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -2111,18 +2130,18 @@
         </Grid>
 
         <Border Grid.Row="2"
-                Padding="10,0"
+                Padding="8,0"
                 Background="{DynamicResource PanelBackgroundBrush}"
                 BorderBrush="{DynamicResource DividerBrush}"
                 BorderThickness="0,1,0,0">
             <DockPanel LastChildFill="True">
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Margin="12,0" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding RateText}" />
-                    <TextBlock Margin="12,0" Foreground="{DynamicResource ReceiveBrush}" Text="{Binding ReceivedBytes, StringFormat=RX {0:N0}}" />
-                    <TextBlock Margin="12,0" Foreground="{DynamicResource SendBrush}" Text="{Binding SentBytes, StringFormat=TX {0:N0}}" />
+                    <TextBlock Margin="10,0" FontSize="11" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding RateText}" />
+                    <TextBlock Margin="10,0" FontSize="11" Foreground="{DynamicResource ReceiveBrush}" Text="{Binding ReceivedBytes, StringFormat=RX {0:N0}}" />
+                    <TextBlock Margin="10,0" FontSize="11" Foreground="{DynamicResource SendBrush}" Text="{Binding SentBytes, StringFormat=TX {0:N0}}" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse Width="8" Height="8" Margin="0,0,7,0">
+                    <Ellipse Width="7" Height="7" Margin="0,0,6,0">
                         <Ellipse.Style>
                             <Style TargetType="Ellipse">
                                 <Setter Property="Fill" Value="#8B9690" />
@@ -2134,7 +2153,7 @@
                             </Style>
                         </Ellipse.Style>
                     </Ellipse>
-                    <TextBlock Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock FontSize="11" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
             </DockPanel>
         </Border>

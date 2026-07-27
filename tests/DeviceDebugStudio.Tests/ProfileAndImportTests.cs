@@ -11,6 +11,12 @@ namespace DeviceDebugStudio.Tests;
 public sealed class ProfileAndImportTests
 {
     [Fact]
+    public void TerminalPreferencesDefaultToCrLfLineEnding()
+    {
+        Assert.Equal("CRLF", new TerminalPreferences().LineEnding);
+    }
+
+    [Fact]
     public void AppSettingsRoundTripsTerminalColumnWidths()
     {
         AppSettings settings = new()
