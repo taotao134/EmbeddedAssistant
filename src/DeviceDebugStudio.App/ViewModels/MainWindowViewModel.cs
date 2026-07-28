@@ -92,6 +92,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private bool _loadingTerminalDisplaySettings;
     private DeviceProfile? _activeProfile;
     private Task _lastProfileSaveTask = Task.CompletedTask;
+    private long _profileSaveRevision;
+    private int _sendCommandAvailabilityRefreshPending;
     private Task _lastAppSettingsSaveTask = Task.CompletedTask;
     private readonly SemaphoreSlim _appSettingsSaveLock = new(1, 1);
     private WorkspaceMode? _connectedWorkspaceMode;
@@ -146,7 +148,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _profileSaveTimer.Tick += async (_, _) =>
         {
             _profileSaveTimer.Stop();
-            await SaveActiveProfileSnapshotAsync(showStatus: false).ConfigureAwait(true);
+            DeviceProfile? snapshot = CreateActiveProfileSnapshot();
+            if (snapshot is null)
+            {
+                return;
+            }
+
+            Task saveTask = QueueProfileSave(snapshot);
+            await ObserveProfileSaveAsync(saveTask).ConfigureAwait(true);
         };
         _appSettingsSaveTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -230,8 +239,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<SerialPortInfo> SerialPorts { get; } = [];
     public ObservableCollection<BleDeviceInfo> BleDevices { get; } = [];
     public ObservableCollection<BleGattServiceInfo> GattServices { get; } = [];
-    public ObservableCollection<TerminalRecordItem> TerminalRecords { get; } = [];
-    public ObservableCollection<FrameRecordItem> FrameRecords { get; } = [];
+    public RangeObservableCollection<TerminalRecordItem> TerminalRecords { get; } = [];
+    public RangeObservableCollection<FrameRecordItem> FrameRecords { get; } = [];
     public RangeObservableCollection<QuickCommandItemViewModel> QuickCommands { get; } = [];
     public ObservableCollection<ColorPaletteItem> TerminalTextPalette { get; } = [];
     public ObservableCollection<ColorPaletteItem> TerminalBackgroundPalette { get; } = [];
@@ -338,6 +347,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     [ObservableProperty]
     private bool autoUpdateEnabled = true;
+
+    [ObservableProperty]
+    private bool debugLoggingEnabled;
+
+    [ObservableProperty]
+    private bool captureCommunication;
 
     [ObservableProperty]
     private bool isUpdateBusy;
@@ -481,7 +496,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     private bool modbusSlaveEnabled;
 
-    public string ConnectionButtonText => _connectionDesired ? "断开" : "连接";
+    public string ConnectionButtonText => SelectedTransportKind == TransportKind.TcpServer
+        ? _connectionDesired ? "停止监听" : "开始监听"
+        : _connectionDesired ? "断开" : "连接";
+    public string AutoReconnectText => SelectedTransportKind == TransportKind.TcpServer
+        ? "自动恢复监听"
+        : "自动重连";
+    public string DiagnosticsDirectory => AppPaths.DiagnosticsDirectory;
+    public string UpdateDiagnosticsDirectory => AppPaths.UpdateDiagnosticsDirectory;
+    public string CaptureDirectory => AppPaths.CaptureDirectory;
     public string SelectedFramingModeDescription => FramingModes
         .FirstOrDefault(option => option.Mode == SelectedFramingMode)?.Description
         ?? "请选择一种分帧方式。";
@@ -501,7 +524,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public bool IsModbusWorkspace => SelectedWorkspaceMode.Mode == WorkspaceMode.Modbus;
     public bool IsFrameWorkspaceVisible => SelectedWorkspaceMode.Mode is WorkspaceMode.Serial or WorkspaceMode.Network;
     public bool IsChartWorkspaceVisible => SelectedWorkspaceMode.Mode is WorkspaceMode.Serial or WorkspaceMode.Network or WorkspaceMode.Bluetooth;
-    public string TerminalTabHeader => IsModbusWorkspace ? "通信记录" : "终端";
+    public string TerminalTabHeader => IsModbusWorkspace
+        ? "通信记录"
+        : SelectedTransportKind switch
+        {
+            TransportKind.BleGatt => "BLE 终端",
+            TransportKind.Serial => "串口终端",
+            TransportKind.TcpClient or TransportKind.TcpServer or TransportKind.Udp => "网络终端",
+            _ => "终端"
+        };
 
     public async Task InitializeAsync(AppSettings? startupSettings = null)
     {
@@ -520,6 +551,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             ? AppSettings.DefaultGitHubRepository
             : settings.GitHubRepository.Trim();
         AutoUpdateEnabled = settings.AutoUpdateEnabled;
+        DebugLoggingEnabled = settings.DebugLoggingEnabled;
         UpdateAvailableTransportOptions();
         await ReloadProfilesAsync(settings.SelectedProfileId).ConfigureAwait(true);
         if (Profiles.Count == 0)
@@ -575,6 +607,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception exception)
         {
+            OnlineUpdateService.ArchiveFailure("检查 GitHub 更新", exception);
             UpdateStatusText = $"检查更新失败：{exception.Message}";
             return null;
         }
@@ -640,6 +673,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception exception)
         {
+            OnlineUpdateService.ArchiveFailure("下载或准备更新", exception);
             UpdateStatusText = $"更新失败：{exception.Message}";
             return false;
         }
@@ -761,15 +795,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             CaptureOpenResult result = await _captureFileReader.ReadAsync(path).ConfigureAwait(true);
             TerminalRecords.Clear();
-            int index = 0;
+            List<TerminalRecordItem> batch = new(1000);
             foreach (TransportPacket packet in result.Packets)
             {
-                TerminalRecords.Add(FormatPacket(packet));
-                if (++index % 1000 == 0)
+                batch.Add(FormatPacket(packet));
+                if (batch.Count >= 1000)
                 {
+                    TerminalRecords.AddRange(batch);
+                    batch.Clear();
                     await Dispatcher.Yield(DispatcherPriority.Background);
                 }
             }
+            TerminalRecords.AddRange(batch);
             RecordsAppended?.Invoke(TerminalRecords.Count);
             StatusText = result.TotalPackets > result.Packets.Count
                 ? $"已打开捕获：{path}，显示最后 {result.Packets.Count:N0}/{result.TotalPackets:N0} 条"
@@ -875,27 +912,54 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private async Task ScanBleAsync()
     {
+        if (IsBusy)
+        {
+            return;
+        }
+
         IsBusy = true;
         BleDiscoveryNotice = string.Empty;
-        StatusText = "正在扫描 Windows 蓝牙设备…";
+        StatusText = "正在扫描 BLE 广播…";
         try
         {
-            IReadOnlyList<BleDeviceInfo> devices = await _bleDiscovery.ScanAsync(TimeSpan.FromSeconds(4)).ConfigureAwait(true);
+            IReadOnlyList<BleDeviceInfo> devices = await _bleDiscovery.ScanAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(true);
             BleDevices.Clear();
             foreach (BleDeviceInfo device in devices)
             {
                 BleDevices.Add(device);
             }
+            ulong preferredAddress = SelectedBleDevice?.Address
+                ?? (_activeProfile?.Transport as BleGattTransportSettings)?.BluetoothAddress
+                ?? 0;
+            SelectedBleDevice = devices.FirstOrDefault(device => device.Address == preferredAddress)
+                ?? devices.FirstOrDefault();
+
+            List<string> notices = [];
+            if (!string.IsNullOrWhiteSpace(_bleDiscovery.LastWatcherError))
+            {
+                notices.Add($"广播扫描异常：{_bleDiscovery.LastWatcherError}");
+            }
+            notices.Add($"广播 {_bleDiscovery.LastAdvertisementCount} 个，系统 BLE {_bleDiscovery.LastSystemCount} 个。");
+            if (devices.Count == 0)
+            {
+                notices.Add("未发现 BLE 设备。请确认设备在广播，或已在 Windows 蓝牙设置中配对。");
+            }
+            else if (_bleDiscovery.LastAdvertisementCount == 0 && _bleDiscovery.LastSystemCount > 0)
+            {
+                notices.Add("当前仅来自 Windows 系统已关联 BLE 列表（设备可能已停止广播）。Windows 显示“电脑”只是 Appearance 分类，仍可尝试浏览 GATT。");
+            }
             if (_bleDiscovery.LastClassicDeviceNames.Count > 0)
             {
                 string classicNames = string.Join("、", _bleDiscovery.LastClassicDeviceNames);
-                BleDiscoveryNotice = $"检测到经典蓝牙：{classicNames}。BLE GATT 模式无法连接这些设备。";
+                notices.Add($"另检测到经典蓝牙：{classicNames}。经典设备不能用 BLE GATT 连接。");
             }
-            StatusText = $"发现 {devices.Count} 个 BLE 设备";
+            BleDiscoveryNotice = string.Join(" ", notices);
+            StatusText = $"发现 {devices.Count} 个 BLE 设备（广播 {_bleDiscovery.LastAdvertisementCount} / 系统 {_bleDiscovery.LastSystemCount}）";
         }
         catch (Exception exception)
         {
             StatusText = $"BLE 扫描失败：{exception.Message}";
+            BleDiscoveryNotice = exception.Message;
         }
         finally
         {
@@ -1012,34 +1076,44 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         CancellationToken cancellationToken = source.Token;
         _sendRepeatCancellation = source;
         IsSendRepeating = true;
-        StatusText = $"已开始循环发送，间隔 {Math.Clamp(SendRepeatIntervalMs, 1, 60_000)} ms";
+        int interval = Math.Clamp(SendRepeatIntervalMs, 1, 60_000);
+        StatusText = $"已开始高性能循环发送，间隔 {interval} ms";
 
         bool failed = false;
         try
         {
-            while (!cancellationToken.IsCancellationRequested && SendRepeatEnabled && CanSend)
+            CommunicationSession session = _session ?? throw new InvalidOperationException("请先建立连接。 ");
+            bool sentAsHex = SendAsHex;
+            byte[] data = BuildSendPayload(
+                SendText,
+                sentAsHex,
+                SelectedLineEnding,
+                SelectedSendChecksum,
+                ChecksumLittleEndian);
+            if (data.Length == 0)
             {
-                bool sent = await SendPayloadAsync(
-                    SendText,
-                    SendAsHex,
-                    SelectedLineEnding,
-                    SelectedSendChecksum,
-                    ChecksumLittleEndian,
-                    updateStatus: false,
-                    source: "底部循环发送").ConfigureAwait(true);
-                if (!sent)
-                {
-                    failed = true;
-                    SendRepeatEnabled = false;
-                    break;
-                }
-
-                int interval = Math.Clamp(SendRepeatIntervalMs, 1, 60_000);
-                await Task.Delay(interval, cancellationToken).ConfigureAwait(true);
+                throw new InvalidOperationException("发送内容为空。 ");
             }
+
+            Log.Information(
+                "启动高性能循环发送 | 端点={Endpoint} | 间隔={Interval}ms | 字节={ByteCount}",
+                session.Transport.DisplayName,
+                interval,
+                data.Length);
+            await HighResolutionPeriodicTask.RunAsync(
+                TimeSpan.FromMilliseconds(interval),
+                token => SendPreparedRepeatIterationAsync(session, data, sentAsHex, token),
+                cancellationToken).ConfigureAwait(true);
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (Exception exception) when (exception is FormatException or InvalidOperationException or IOException or ArgumentException)
+        {
+            failed = true;
+            SendRepeatEnabled = false;
+            StatusText = $"循环发送失败：{exception.Message}";
+            Log.Error(exception, "高性能循环发送失败");
         }
         finally
         {
@@ -1129,20 +1203,46 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         CancellationTokenSource source = new();
         CancellationToken cancellationToken = source.Token;
-        _repeatCommands[command.Id] = source;
-        command.IsRepeating = true;
-        command.RegisterUse();
-        ScheduleProfileSave();
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
+            CommunicationSession session = _session ?? throw new InvalidOperationException("请先建立连接。 ");
+            (bool isHex, Encoding encoding, _) = ResolveQuickCommandDataFormat(command);
+            byte[] data = BuildSendPayload(
+                command.TemplateOrPayload,
+                isHex,
+                command.LineEnding,
+                command.Checksum,
+                command.ChecksumLittleEndian,
+                encoding,
+                BuildQuickCommandVariables(command));
+            if (data.Length == 0)
             {
-                _ = await SendQuickCommandPayloadAsync(command).ConfigureAwait(true);
-                await Task.Delay(Math.Max(10, command.RepeatIntervalMs), cancellationToken).ConfigureAwait(true);
+                throw new InvalidOperationException("发送内容为空。 ");
             }
+
+            int interval = Math.Clamp(command.RepeatIntervalMs, 10, 60_000);
+            _repeatCommands[command.Id] = source;
+            command.IsRepeating = true;
+            command.RegisterUse();
+            ScheduleProfileSave();
+            Log.Information(
+                "启动快捷指令高性能循环发送 | 名称={Name} | 端点={Endpoint} | 间隔={Interval}ms | 字节={ByteCount}",
+                command.Name,
+                session.Transport.DisplayName,
+                interval,
+                data.Length);
+            await HighResolutionPeriodicTask.RunAsync(
+                TimeSpan.FromMilliseconds(interval),
+                token => SendPreparedRepeatIterationAsync(session, data, isHex, token),
+                cancellationToken).ConfigureAwait(true);
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (Exception exception) when (exception is FormatException or InvalidOperationException or IOException or ArgumentException)
+        {
+            StatusText = $"快捷指令循环发送失败：{exception.Message}";
+            Log.Error(exception, "快捷指令高性能循环发送失败 | 名称={Name}", command.Name);
         }
         finally
         {
@@ -1372,6 +1472,24 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private void RestartSendRepeatIfActive()
+    {
+        if (SendRepeatEnabled && _sendRepeatCancellation is { } source)
+        {
+            CancelWithoutThrow(source);
+        }
+    }
+
+    private static async ValueTask<bool> SendPreparedRepeatIterationAsync(
+        CommunicationSession session,
+        byte[] data,
+        bool sentAsHex,
+        CancellationToken cancellationToken)
+    {
+        await session.SendAsync(data, cancellationToken: cancellationToken, sentAsHex: sentAsHex).ConfigureAwait(false);
+        return true;
+    }
+
     private QuickCommandItemViewModel? FindQuickCommand(QuickCommandVariableSetItemViewModel variableSet) =>
         QuickCommands.FirstOrDefault(command => command.VariableSets.Contains(variableSet));
 
@@ -1549,7 +1667,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             CancelWithoutThrow(source);
         }
         await SaveActiveProfileSnapshotAsync(showStatus: false).ConfigureAwait(true);
-        await _lastProfileSaveTask.ConfigureAwait(true);
+        try
+        {
+            await _lastProfileSaveTask.ConfigureAwait(true);
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(exception, "关闭窗口时保存设备配置失败");
+        }
         await _lastAppSettingsSaveTask.ConfigureAwait(true);
         await SaveAppSettingsAsync().ConfigureAwait(true);
         _connectionDesired = false;
@@ -1567,6 +1692,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (_activeProfile is not null && _activeProfile.Id != value.Id)
         {
+            _pendingTerminal.Clear();
+            _serialTerminalBuffer.Clear();
+            TerminalRecords.Clear();
+            FrameRecords.Clear();
             DeviceProfile? snapshot = CreateActiveProfileSnapshot();
             if (snapshot is not null)
             {
@@ -1575,7 +1704,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 {
                     Profiles[index] = snapshot;
                 }
-                _lastProfileSaveTask = QueueProfileSaveAsync(_lastProfileSaveTask, snapshot);
+                QueueProfileSave(snapshot);
             }
         }
 
@@ -1584,11 +1713,64 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _appSettingsSaveTimer.Start();
     }
 
-    private Task QueueProfileSaveAsync(Task previousSave, DeviceProfile snapshot) => Task.Run(async () =>
+    private Task QueueProfileSave(DeviceProfile snapshot)
     {
-        await previousSave.ConfigureAwait(false);
+        long revision = Interlocked.Increment(ref _profileSaveRevision);
+        Task previousSave = _lastProfileSaveTask;
+        Task saveTask = Task.Run(() => QueueProfileSaveAsync(previousSave, snapshot, revision));
+        _lastProfileSaveTask = saveTask;
+        return saveTask;
+    }
+
+    private async Task QueueProfileSaveAsync(Task previousSave, DeviceProfile snapshot, long revision)
+    {
+        try
+        {
+            await previousSave.ConfigureAwait(false);
+        }
+        catch
+        {
+            // 上一次保存失败不应阻塞后续配置写入。
+        }
+
+        if (revision != Volatile.Read(ref _profileSaveRevision))
+        {
+            return;
+        }
+
         await _profileStore.SaveAsync(snapshot).ConfigureAwait(false);
-    });
+    }
+
+    private async Task ObserveProfileSaveAsync(Task saveTask)
+    {
+        try
+        {
+            await saveTask.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            Dispatcher dispatcher = Application.Current.Dispatcher;
+            if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+            {
+                return;
+            }
+
+            try
+            {
+                await dispatcher.InvokeAsync(() =>
+                {
+                    if (Volatile.Read(ref _disposed) == 0)
+                    {
+                        StatusText = $"设备配置自动保存失败：{exception.Message}";
+                    }
+                }, DispatcherPriority.Background);
+            }
+            catch (InvalidOperationException)
+            {
+                // 关闭窗口期间 Dispatcher 可能已经停止，此时无需再更新状态栏。
+            }
+        }
+    }
 
     partial void OnTerminalFontSizeChanged(double value)
     {
@@ -1778,6 +1960,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _appSettingsSaveTimer.Start();
     }
 
+    public void ResetDiagnosticSettings()
+    {
+        DebugLoggingEnabled = false;
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
     private static void LoadTerminalPalette(
         ObservableCollection<ColorPaletteItem> target,
         IReadOnlyList<string>? savedColors,
@@ -1797,6 +1986,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         SendRepeatEnabled = false;
         StopSendRepeat();
+        _pendingTerminal.Clear();
+        _serialTerminalBuffer.Clear();
+        TerminalRecords.Clear();
+        FrameRecords.Clear();
         if (_connectedWorkspaceMode is not null && _connectedWorkspaceMode != value.Mode)
         {
             _connectionDesired = false;
@@ -1831,7 +2024,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             return;
         }
+        _pendingTerminal.Clear();
+        _serialTerminalBuffer.Clear();
+        TerminalRecords.Clear();
+        FrameRecords.Clear();
+        OnPropertyChanged(nameof(ConnectionButtonText));
+        OnPropertyChanged(nameof(AutoReconnectText));
         OnPropertyChanged(nameof(ConnectionSummary));
+        OnPropertyChanged(nameof(TerminalTabHeader));
         ScheduleProfileSave();
         ScheduleConnectionConfigurationApply();
     }
@@ -1853,10 +2053,32 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _appSettingsSaveTimer.Start();
     }
 
+    partial void OnDebugLoggingEnabledChanged(bool value)
+    {
+        if (App.DiagnosticLoggingEnabled != value)
+        {
+            App.ConfigureDiagnosticLogging(value);
+        }
+        if (value)
+        {
+            Log.Information("调试日志已开启");
+        }
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
+    partial void OnCaptureCommunicationChanged(bool value)
+    {
+        StatusText = value
+            ? "通信记录已开启，将从下一次连接开始保存"
+            : "通信记录已关闭，后续连接不再自动保存";
+    }
+
     partial void OnSendTextChanged(string value)
     {
         OnPropertyChanged(nameof(CanSend));
         RefreshSendCommandAvailability();
+        RestartSendRepeatIfActive();
         UpdateSendRepeatState();
     }
 
@@ -1865,6 +2087,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (_suppressSendModeConversion || string.IsNullOrEmpty(SendText))
         {
             ScheduleProfileSave();
+            RestartSendRepeatIfActive();
             return;
         }
 
@@ -1890,6 +2113,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             _suppressSendModeConversion = false;
             ScheduleProfileSave();
+            RestartSendRepeatIfActive();
         }
     }
 
@@ -1929,6 +2153,21 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     partial void OnReceiveTimeoutMsChanged(int value) => ScheduleProfileSave();
     partial void OnAutoReconnectChanged(bool value) => ScheduleProfileSave();
     partial void OnSendRepeatEnabledChanged(bool value) => UpdateSendRepeatState();
+    partial void OnSelectedLineEndingChanged(string value)
+    {
+        ScheduleProfileSave();
+        RestartSendRepeatIfActive();
+    }
+    partial void OnSelectedSendChecksumChanged(ChecksumKind value)
+    {
+        ScheduleProfileSave();
+        RestartSendRepeatIfActive();
+    }
+    partial void OnChecksumLittleEndianChanged(bool value)
+    {
+        ScheduleProfileSave();
+        RestartSendRepeatIfActive();
+    }
     partial void OnSendRepeatIntervalMsChanged(int value)
     {
         int normalized = Math.Clamp(value, 1, 60_000);
@@ -1939,6 +2178,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         ScheduleProfileSave();
+        RestartSendRepeatIfActive();
     }
     partial void OnHostChanged(string value) => OnConnectionConfigurationChanged();
     partial void OnRemotePortChanged(int value) => OnConnectionConfigurationChanged();
@@ -1977,9 +2217,23 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        SendCommand.NotifyCanExecuteChanged();
-        SendQuickCommandCommand.NotifyCanExecuteChanged();
-        ToggleQuickRepeatCommand.NotifyCanExecuteChanged();
+        if (Interlocked.Exchange(ref _sendCommandAvailabilityRefreshPending, 1) != 0)
+        {
+            return;
+        }
+
+        _ = dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            Interlocked.Exchange(ref _sendCommandAvailabilityRefreshPending, 0);
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            SendCommand.NotifyCanExecuteChanged();
+            SendQuickCommandCommand.NotifyCanExecuteChanged();
+            ToggleQuickRepeatCommand.NotifyCanExecuteChanged();
+        }));
     }
 
     partial void OnModbusUnitIdChanged(int value)
@@ -2092,9 +2346,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private async Task ConnectInternalAsync(CancellationToken cancellationToken = default)
     {
+        TransportKind connectingKind = SelectedTransportKind;
         IsBusy = true;
         _manualDisconnect = false;
-        StatusText = "正在连接…";
+        StatusText = connectingKind == TransportKind.TcpServer ? "正在启动监听…" : "正在连接…";
         CommunicationSession? connectingSession = null;
         try
         {
@@ -2102,7 +2357,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             int configurationRevision = Volatile.Read(ref _connectionConfigurationRevision);
             TransportSettings settings = BuildTransportSettings();
             ITransport transport = TransportFactory.Create(settings);
-            SqliteCaptureStore capture = new();
+            ICaptureStore capture = CaptureCommunication
+                ? new SqliteCaptureStore()
+                : new NullCaptureStore();
             connectingSession = new CommunicationSession(SelectedProfile?.Name ?? "快速调试", transport, capture);
             connectingSession.Faulted += OnSessionFaulted;
             await connectingSession.ConnectAsync(cancellationToken).ConfigureAwait(true);
@@ -2112,7 +2369,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 connectingSession.Faulted -= OnSessionFaulted;
                 await connectingSession.DisposeAsync().ConfigureAwait(true);
                 connectingSession = null;
-                StatusText = _connectionDesired ? "连接模式已变化，请重新连接" : "已断开";
+                StatusText = _connectionDesired
+                    ? connectingKind == TransportKind.TcpServer ? "监听配置已变化，请重新监听" : "连接模式已变化，请重新连接"
+                    : GetDisconnectedStatusText(connectingKind);
                 return;
             }
 
@@ -2125,15 +2384,28 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             Volatile.Write(ref _connectedConfigurationRevision, configurationRevision);
             _lastDisplayDropCount = 0;
             IsConnected = true;
-            StatusText = $"已连接：{transport.DisplayName}";
+            StatusText = settings switch
+            {
+                TcpServerTransportSettings tcpServer => $"已监听：{tcpServer.LocalAddress}:{tcpServer.Port}",
+                TcpClientTransportSettings tcpClient => $"已连接：{tcpClient.Host}:{tcpClient.Port}",
+                _ => $"已连接：{transport.DisplayName}"
+            };
+            if (CaptureCommunication)
+            {
+                StatusText += " · 正在记录通信";
+            }
         }
         catch (OperationCanceledException)
         {
-            StatusText = _connectionDesired ? "正在重新连接…" : "已断开";
+            StatusText = _connectionDesired
+                ? connectingKind == TransportKind.TcpServer ? "正在重新监听…" : "正在重新连接…"
+                : GetDisconnectedStatusText(connectingKind);
         }
         catch (Exception exception)
         {
-            StatusText = $"连接失败：{exception.Message}";
+            StatusText = connectingKind == TransportKind.TcpServer
+                ? $"监听失败：{exception.Message}"
+                : $"连接失败：{exception.Message}";
             _connectionDesired = false;
             OnPropertyChanged(nameof(ConnectionButtonText));
         }
@@ -2148,7 +2420,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private async Task DisconnectInternalAsync() => await DisconnectSessionAsync("已断开").ConfigureAwait(true);
+    private async Task DisconnectInternalAsync()
+    {
+        TransportKind disconnectingKind = _session?.Transport.Kind ?? SelectedTransportKind;
+        await DisconnectSessionAsync(GetDisconnectedStatusText(disconnectingKind)).ConfigureAwait(true);
+    }
+
+    private static string GetDisconnectedStatusText(TransportKind kind) => kind == TransportKind.TcpServer
+        ? "已停止监听"
+        : "已断开连接";
 
     private async Task DisconnectSessionAsync(string statusText)
     {
@@ -2172,6 +2452,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             }
         }
         consume?.Dispose();
+        _pendingTerminal.Clear();
+        _serialTerminalBuffer.Clear();
         _connectedWorkspaceMode = null;
         IsConnected = false;
         StatusText = statusText;
@@ -2314,15 +2596,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 throw new InvalidOperationException("请先建立连接。 ");
             }
 
-            string expanded = ByteText.ExpandVariables(
+            final = BuildSendPayload(
                 payload,
-                variables ?? EmptyVariables);
-            byte[] data = ByteText.ParseInput(expanded, isHex, textEncoding ?? GetSelectedEncoding());
-            byte[] ending = GetLineEnding(lineEnding);
-            byte[] withEnding = new byte[data.Length + ending.Length];
-            data.CopyTo(withEnding, 0);
-            ending.CopyTo(withEnding, data.Length);
-            final = ChecksumCalculator.Append(withEnding, checksum, littleEndian);
+                isHex,
+                lineEnding,
+                checksum,
+                littleEndian,
+                textEncoding,
+                variables);
             if (final.Length == 0)
             {
                 StatusText = "发送内容为空";
@@ -2361,6 +2642,24 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private byte[] BuildSendPayload(
+        string payload,
+        bool isHex,
+        string lineEnding,
+        ChecksumKind checksum,
+        bool littleEndian,
+        Encoding? textEncoding = null,
+        IReadOnlyDictionary<string, string>? variables = null)
+    {
+        string expanded = ByteText.ExpandVariables(payload, variables ?? EmptyVariables);
+        byte[] data = ByteText.ParseInput(expanded, isHex, textEncoding ?? GetSelectedEncoding());
+        byte[] ending = GetLineEnding(lineEnding);
+        byte[] withEnding = new byte[data.Length + ending.Length];
+        data.CopyTo(withEnding, 0);
+        ending.CopyTo(withEnding, data.Length);
+        return ChecksumCalculator.Append(withEnding, checksum, littleEndian);
+    }
+
     private async void OnSessionFaulted(object? sender, Exception exception)
     {
         if (!Application.Current.Dispatcher.CheckAccess())
@@ -2375,7 +2674,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        StatusText = $"连接异常：{exception.Message}";
+        TransportKind faultedKind = faultedSession.Transport.Kind;
+        StatusText = faultedKind == TransportKind.TcpServer
+            ? $"监听异常：{exception.Message}"
+            : $"连接异常：{exception.Message}";
         IsConnected = false;
         bool shouldReconnect = !_manualDisconnect && _connectionDesired && AutoReconnect;
         if (!shouldReconnect)
@@ -2385,7 +2687,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         else
         {
-            StatusText = "连接中断，2 秒后重连…";
+            StatusText = faultedKind == TransportKind.TcpServer
+                ? "监听中断，2 秒后重新监听…"
+                : "连接中断，2 秒后重连…";
             await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(true);
         }
 
@@ -2434,27 +2738,26 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 _serialTerminalBuffer.Clear();
             }
         }
-        foreach (TransportPacket packet in displayPackets)
+        if (displayPackets.Count > 0)
         {
-            TerminalRecords.Add(FormatPacket(packet));
+            TerminalRecords.AddRange(displayPackets.Select(FormatPacket));
         }
         int added = displayPackets.Count;
         int limit = SelectedProfile?.Terminal.UiRecordLimit ?? 100_000;
-        while (TerminalRecords.Count > limit)
-        {
-            TerminalRecords.RemoveAt(0);
-        }
+        TerminalRecords.RemoveFirst(TerminalRecords.Count - limit);
 
         int frameAdded = 0;
+        List<FrameRecordItem> frameBatch = [];
         while (frameAdded < 200 && _pendingFrames.TryDequeue(out FrameRecordItem? frame))
         {
-            FrameRecords.Add(frame);
+            frameBatch.Add(frame);
             frameAdded++;
         }
-        while (FrameRecords.Count > 20_000)
+        if (frameBatch.Count > 0)
         {
-            FrameRecords.RemoveAt(0);
+            FrameRecords.AddRange(frameBatch);
         }
+        FrameRecords.RemoveFirst(FrameRecords.Count - 20_000);
 
         while (_pendingChartValues.TryDequeue(out double value))
         {
@@ -2628,11 +2931,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             RefreshSendCommandAvailability();
         }
-        if (args.PropertyName == nameof(QuickCommandItemViewModel.SelectedVariableSet)
-            && sender is QuickCommandItemViewModel { IsRepeating: true } repeating)
+        if (sender is QuickCommandItemViewModel { IsRepeating: true } repeating
+            && args.PropertyName is nameof(QuickCommandItemViewModel.Payload)
+                or nameof(QuickCommandItemViewModel.Template)
+                or nameof(QuickCommandItemViewModel.LineEnding)
+                or nameof(QuickCommandItemViewModel.Checksum)
+                or nameof(QuickCommandItemViewModel.ChecksumLittleEndian)
+                or nameof(QuickCommandItemViewModel.RepeatIntervalMs)
+                or nameof(QuickCommandItemViewModel.SelectedVariableSet)
+                or nameof(QuickCommandItemViewModel.VariableSets))
         {
             StopQuickCommandRepeat(repeating);
-            StatusText = "已切换变量方案，循环发送已停止";
+            StatusText = "快捷指令参数已变化，循环发送已停止";
         }
         ScheduleProfileSave();
     }
@@ -2719,22 +3029,36 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             return;
         }
-        await _lastProfileSaveTask.ConfigureAwait(true);
-        await _profileStore.SaveAsync(snapshot).ConfigureAwait(true);
-        _activeProfile = snapshot;
 
-        int index = Profiles.ToList().FindIndex(profile => profile.Id == snapshot.Id);
-        if (index >= 0)
+        try
         {
-            _suppressProfileSelection = true;
-            try
+            await QueueProfileSave(snapshot).ConfigureAwait(true);
+        }
+        catch (Exception exception)
+        {
+            if (showStatus)
             {
-                Profiles[index] = snapshot;
-                SelectedProfile = snapshot;
+                StatusText = $"设备配置保存失败：{exception.Message}";
             }
-            finally
+            return;
+        }
+
+        // 自动保存只写文件，不替换整个 Profiles 集合；手动保存时再同步名称等轻量元数据。
+        if (showStatus)
+        {
+            int index = Profiles.ToList().FindIndex(profile => profile.Id == snapshot.Id);
+            if (index >= 0 && !string.Equals(Profiles[index].Name, snapshot.Name, StringComparison.Ordinal))
             {
-                _suppressProfileSelection = false;
+                _suppressProfileSelection = true;
+                try
+                {
+                    Profiles[index] = snapshot;
+                    SelectedProfile = snapshot;
+                }
+                finally
+                {
+                    _suppressProfileSelection = false;
+                }
             }
         }
 
@@ -3029,6 +3353,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ReadOnlySpan<byte> data,
         string? detail = null)
     {
+        if (!App.DiagnosticLoggingEnabled)
+        {
+            return;
+        }
+
         bool shouldLog;
         bool suppressionStarted = false;
         lock (_transportDiagnosticLogLock)
@@ -3147,6 +3476,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 TerminalBackgroundColor = App.NormalizeTerminalColor(TerminalBackgroundColor, App.DefaultTerminalBackgroundColor),
                 GitHubRepository = GitHubRepository.Trim(),
                 AutoUpdateEnabled = AutoUpdateEnabled,
+                DebugLoggingEnabled = DebugLoggingEnabled,
                 TerminalTextPalette = TerminalTextPalette.Select(item => item.Color).ToList(),
                 TerminalBackgroundPalette = TerminalBackgroundPalette.Select(item => item.Color).ToList()
             }).ConfigureAwait(false);

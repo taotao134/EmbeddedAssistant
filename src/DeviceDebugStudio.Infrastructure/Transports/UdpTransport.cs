@@ -7,18 +7,24 @@ namespace DeviceDebugStudio.Infrastructure.Transports;
 public sealed class UdpTransport(UdpTransportSettings settings) : TransportBase
 {
     private UdpClient? _client;
+    private IPEndPoint? _defaultRemoteEndpoint;
     private CancellationTokenSource? _receiveCancellation;
     private Task? _receiveTask;
 
     public override string DisplayName => $"UDP {settings.LocalAddress}:{settings.LocalPort}";
     public override TransportKind Kind => TransportKind.Udp;
 
-    protected override Task OnConnectAsync(CancellationToken cancellationToken)
+    protected override async Task OnConnectAsync(CancellationToken cancellationToken)
     {
         IPAddress localAddress = string.IsNullOrWhiteSpace(settings.LocalAddress) || settings.LocalAddress == "0.0.0.0"
             ? IPAddress.Any
             : IPAddress.Parse(settings.LocalAddress);
+        IPEndPoint remoteEndpoint = await ResolveEndpointAsync(
+            settings.RemoteAddress,
+            settings.RemotePort,
+            cancellationToken).ConfigureAwait(false);
         _client = new UdpClient(new IPEndPoint(localAddress, settings.LocalPort));
+        _defaultRemoteEndpoint = remoteEndpoint;
         _client.EnableBroadcast = settings.EnableBroadcast;
         if (!string.IsNullOrWhiteSpace(settings.MulticastAddress))
         {
@@ -27,7 +33,6 @@ public sealed class UdpTransport(UdpTransportSettings settings) : TransportBase
 
         _receiveCancellation = new CancellationTokenSource();
         _receiveTask = Task.Run(() => ReceiveLoopAsync(_receiveCancellation.Token), CancellationToken.None);
-        return Task.CompletedTask;
     }
 
     protected override async Task OnDisconnectAsync(CancellationToken cancellationToken)
@@ -49,13 +54,16 @@ public sealed class UdpTransport(UdpTransportSettings settings) : TransportBase
 
         _client?.Dispose();
         _client = null;
+        _defaultRemoteEndpoint = null;
         source?.Dispose();
     }
 
     public override async ValueTask SendAsync(ReadOnlyMemory<byte> data, string? target = null, CancellationToken cancellationToken = default)
     {
         EnsureConnected();
-        IPEndPoint endpoint = target is null ? await ResolveEndpointAsync(settings.RemoteAddress, settings.RemotePort, cancellationToken).ConfigureAwait(false) : ParseEndpoint(target);
+        IPEndPoint endpoint = target is null
+            ? _defaultRemoteEndpoint ?? throw new InvalidOperationException("UDP 默认目标未初始化。 ")
+            : ParseEndpoint(target);
         await (_client ?? throw new InvalidOperationException("UDP 未初始化。 ")).SendAsync(data, endpoint, cancellationToken).ConfigureAwait(false);
     }
 

@@ -10,6 +10,10 @@ public static class AppPaths
 
     public static string DiagnosticsDirectory { get; } = EnsureDirectory(Path.Combine(LocalDataDirectory, "Logs"));
 
+    public static string UpdateDiagnosticsDirectory { get; } = EnsureDirectory(Path.Combine(LocalDataDirectory, "Updates"));
+
+    public static string DebugLoggingMarkerPath { get; } = Path.Combine(LocalDataDirectory, "debug-logging.enabled");
+
     public static string CaptureDirectory { get; } = EnsureDirectory(Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
         "DeviceDebugStudio",

@@ -477,6 +477,7 @@ finally {
             }
 
             message = File.ReadAllText(failureLogPath).Trim();
+            ArchiveInstallerFailure(message);
             TryDeleteFile(failureLogPath);
             if (string.IsNullOrWhiteSpace(message))
             {
@@ -495,6 +496,9 @@ finally {
             return false;
         }
     }
+
+    public static void ArchiveFailure(string operation, Exception exception) =>
+        ArchiveFailure(operation, exception.ToString());
 
     public void Dispose()
     {
@@ -693,6 +697,29 @@ finally {
         AppPaths.LocalDataDirectory,
         "Updates",
         InstallerFailureLogFileName);
+
+    private static void ArchiveInstallerFailure(string message) =>
+        ArchiveFailure("安装代理", message);
+
+    private static void ArchiveFailure(string operation, string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        try
+        {
+            string path = Path.Combine(
+                AppPaths.UpdateDiagnosticsDirectory,
+                $"UpdateFailure-{DateTime.Now:yyyyMMdd_HHmmssfff}.log");
+            string content = $"时间：{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}{Environment.NewLine}阶段：{operation}{Environment.NewLine}{Environment.NewLine}{message}";
+            File.WriteAllText(path, content, new UTF8Encoding(false));
+        }
+        catch
+        {
+        }
+    }
 
     private static void TryDeleteFile(string path)
     {

@@ -8,90 +8,274 @@ using Windows.Storage.Streams;
 
 namespace DeviceDebugStudio.Infrastructure.Transports;
 
-public sealed record BleDeviceInfo(ulong Address, string Name, short Rssi)
+[Flags]
+public enum BleDeviceDiscoverySource
+{
+    None = 0,
+    Advertisement = 1,
+    System = 2,
+}
+
+public sealed record BleDeviceInfo(
+    ulong Address,
+    string Name,
+    short Rssi,
+    BleDeviceDiscoverySource Source = BleDeviceDiscoverySource.Advertisement)
 {
     public string AddressText => Address.ToString("X12");
-    public string DisplayName => string.IsNullOrWhiteSpace(Name) ? "未知设备" : Name;
+
+    public string DisplayName
+    {
+        get
+        {
+            string baseName = string.IsNullOrWhiteSpace(Name) ? "未知设备" : Name;
+            return $"{baseName} ({AddressText})";
+        }
+    }
+
+    public string SourceText => Source switch
+    {
+        BleDeviceDiscoverySource.Advertisement => "广播",
+        BleDeviceDiscoverySource.System => "系统",
+        BleDeviceDiscoverySource.Advertisement | BleDeviceDiscoverySource.System => "广播+系统",
+        _ => "未知"
+    };
 
     public BleDeviceInfo MergeAdvertisement(string? name, short rssi) => this with
     {
         Name = string.IsNullOrWhiteSpace(name) ? Name : name.Trim(),
-        Rssi = rssi
+        Rssi = rssi,
+        Source = Source | BleDeviceDiscoverySource.Advertisement
+    };
+
+    public BleDeviceInfo MergeSystem(string? name) => this with
+    {
+        Name = string.IsNullOrWhiteSpace(name) ? Name : name.Trim(),
+        Source = Source | BleDeviceDiscoverySource.System
     };
 
     public BleDeviceInfo WithSystemDisplayName(string? systemDisplayName) => string.IsNullOrWhiteSpace(systemDisplayName)
         ? this
-        : this with { Name = systemDisplayName.Trim() };
+        : this with { Name = systemDisplayName.Trim(), Source = Source | BleDeviceDiscoverySource.System };
 }
 
 public sealed class BleDiscoveryService
 {
     public IReadOnlyList<string> LastClassicDeviceNames { get; private set; } = [];
+    public int LastAdvertisementCount { get; private set; }
+    public int LastSystemCount { get; private set; }
+    public string? LastWatcherError { get; private set; }
 
     public async Task<IReadOnlyList<BleDeviceInfo>> ScanAsync(TimeSpan duration, string? nameFilter = null, CancellationToken cancellationToken = default)
     {
+        duration = TimeSpan.FromMilliseconds(Math.Clamp(duration.TotalMilliseconds, 500, 10_000));
         ConcurrentDictionary<ulong, BleDeviceInfo> devices = new();
-        ConcurrentDictionary<string, string> classicDevices = new(StringComparer.OrdinalIgnoreCase);
-        TaskCompletionSource classicEnumerationCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        BluetoothLEAdvertisementWatcher watcher = new() { ScanningMode = BluetoothLEScanningMode.Active };
-        DeviceWatcher classicWatcher = DeviceInformation.CreateWatcher(BluetoothDevice.GetDeviceSelectorFromPairingState(false));
+        TaskCompletionSource<string?> watcherFault = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        BluetoothLEAdvertisementWatcher watcher = new()
+        {
+            ScanningMode = BluetoothLEScanningMode.Active
+        };
+
         watcher.Received += (_, args) =>
         {
             string name = args.Advertisement.LocalName ?? string.Empty;
             devices.AddOrUpdate(
                 args.BluetoothAddress,
-                new BleDeviceInfo(args.BluetoothAddress, name.Trim(), args.RawSignalStrengthInDBm),
+                new BleDeviceInfo(
+                    args.BluetoothAddress,
+                    name.Trim(),
+                    args.RawSignalStrengthInDBm,
+                    BleDeviceDiscoverySource.Advertisement),
                 (_, existing) => existing.MergeAdvertisement(name, args.RawSignalStrengthInDBm));
         };
-        classicWatcher.Added += (_, device) =>
+        watcher.Stopped += (_, args) =>
         {
-            if (!string.IsNullOrWhiteSpace(device.Name))
+            if (args.Error != BluetoothError.Success)
             {
-                classicDevices[device.Id] = device.Name.Trim();
+                watcherFault.TrySetResult(args.Error.ToString());
+            }
+            else
+            {
+                watcherFault.TrySetResult(null);
             }
         };
-        classicWatcher.EnumerationCompleted += (_, _) => classicEnumerationCompleted.TrySetResult();
 
-        watcher.Start();
-        classicWatcher.Start();
+        LastWatcherError = null;
+        try
+        {
+            watcher.Start();
+        }
+        catch (Exception exception)
+        {
+            LastWatcherError = exception.Message;
+            throw new IOException($"无法启动 BLE 广播扫描：{exception.Message}", exception);
+        }
+
         try
         {
             await Task.Delay(duration, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            watcher.Stop();
+            try
+            {
+                if (watcher.Status is BluetoothLEAdvertisementWatcherStatus.Started
+                    or BluetoothLEAdvertisementWatcherStatus.Stopping)
+                {
+                    watcher.Stop();
+                }
+            }
+            catch
+            {
+            }
         }
 
         try
         {
-            await classicEnumerationCompleted.Task
-                .WaitAsync(TimeSpan.FromSeconds(30), cancellationToken)
+            string? watcherError = await watcherFault.Task
+                .WaitAsync(TimeSpan.FromMilliseconds(500), cancellationToken)
                 .ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(watcherError))
+            {
+                LastWatcherError = watcherError;
+            }
         }
         catch (TimeoutException)
         {
         }
-        finally
+
+        LastAdvertisementCount = devices.Count;
+
+        // 广播已经发现设备时直接返回，避免再逐个打开 Windows 设备对象产生数秒延迟。
+        // 只有没有收到广播时才回退到系统关联列表，兼容已配对但暂时停止广播的设备。
+        if (devices.IsEmpty)
         {
-            if (classicWatcher.Status is DeviceWatcherStatus.Started or DeviceWatcherStatus.EnumerationCompleted)
+            await MergeSystemBleDevicesAsync(devices, cancellationToken).ConfigureAwait(false);
+            LastClassicDeviceNames = await EnumerateClassicBluetoothNamesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            LastClassicDeviceNames = [];
+        }
+
+        LastSystemCount = devices.Values.Count(device => device.Source.HasFlag(BleDeviceDiscoverySource.System));
+
+        return devices.Values
+            .Where(device => string.IsNullOrWhiteSpace(nameFilter)
+                || device.Name.Contains(nameFilter, StringComparison.OrdinalIgnoreCase)
+                || device.AddressText.Contains(nameFilter, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(device => device.Source.HasFlag(BleDeviceDiscoverySource.Advertisement))
+            .ThenByDescending(device => device.Rssi)
+            .ThenBy(device => device.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
+    }
+
+    private static async Task MergeSystemBleDevicesAsync(
+        ConcurrentDictionary<ulong, BleDeviceInfo> devices,
+        CancellationToken cancellationToken)
+    {
+        Task<DeviceInformationCollection?>[] discoveryTasks = [
+            FindSystemBleDevicesAsync(true),
+            FindSystemBleDevicesAsync(false)
+        ];
+        DeviceInformationCollection?[] collections = await Task.WhenAll(discoveryTasks).ConfigureAwait(false);
+        using SemaphoreSlim limiter = new(4, 4);
+        List<Task> resolveTasks = [];
+        foreach (DeviceInformationCollection? systemDevices in collections)
+        {
+            if (systemDevices is null)
             {
-                classicWatcher.Stop();
+                continue;
+            }
+
+            foreach (DeviceInformation deviceInfo in systemDevices)
+            {
+                resolveTasks.Add(ResolveSystemBleDeviceAsync(deviceInfo, devices, limiter, cancellationToken));
             }
         }
 
-        LastClassicDeviceNames = classicDevices.Values
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        await Task.WhenAll(resolveTasks).ConfigureAwait(false);
+    }
+
+    private static async Task<DeviceInformationCollection?> FindSystemBleDevicesAsync(bool paired)
+    {
+        try
+        {
+            string selector = BluetoothLEDevice.GetDeviceSelectorFromPairingState(paired);
+            return await DeviceInformation.FindAllAsync(selector);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task ResolveSystemBleDeviceAsync(
+        DeviceInformation deviceInfo,
+        ConcurrentDictionary<ulong, BleDeviceInfo> devices,
+        SemaphoreSlim limiter,
+        CancellationToken cancellationToken)
+    {
+        await limiter.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using BluetoothLEDevice? bluetoothDevice = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id);
+            if (bluetoothDevice is null || bluetoothDevice.BluetoothAddress == 0)
+            {
+                return;
+            }
+
+            string? name = string.IsNullOrWhiteSpace(deviceInfo.Name)
+                ? bluetoothDevice.Name
+                : deviceInfo.Name;
+            devices.AddOrUpdate(
+                bluetoothDevice.BluetoothAddress,
+                new BleDeviceInfo(
+                    bluetoothDevice.BluetoothAddress,
+                    name?.Trim() ?? string.Empty,
+                    short.MinValue,
+                    BleDeviceDiscoverySource.System),
+                (_, existing) => existing.MergeSystem(name));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+        }
+        finally
+        {
+            limiter.Release();
+        }
+    }
+
+    private static async Task<IReadOnlyList<string>> EnumerateClassicBluetoothNamesAsync(CancellationToken cancellationToken)
+    {
+        ConcurrentDictionary<string, byte> names = new(StringComparer.OrdinalIgnoreCase);
+        foreach (bool paired in new[] { true, false })
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                string selector = BluetoothDevice.GetDeviceSelectorFromPairingState(paired);
+                DeviceInformationCollection classicDevices = await DeviceInformation.FindAllAsync(selector);
+                foreach (DeviceInformation deviceInfo in classicDevices)
+                {
+                    if (!string.IsNullOrWhiteSpace(deviceInfo.Name))
+                    {
+                        names[deviceInfo.Name.Trim()] = 0;
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return names.Keys
             .OrderBy(name => name, StringComparer.CurrentCultureIgnoreCase)
-            .ToArray();
-
-        BleDeviceInfo[] resolvedDevices = await Task.WhenAll(
-            devices.Values.Select(device => ResolveSystemDisplayNameAsync(device, cancellationToken))).ConfigureAwait(false);
-
-        return resolvedDevices
-            .Where(device => string.IsNullOrWhiteSpace(nameFilter)
-                || device.Name.Contains(nameFilter, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(device => device.Rssi)
             .ToArray();
     }
 
@@ -146,25 +330,37 @@ public sealed class BleGattTransport(BleGattTransportSettings settings) : Transp
         }
 
         _service = serviceResult.Services[0];
-        if (Guid.TryParse(settings.ReadCharacteristicUuid, out Guid readUuid))
+        GattCharacteristicsResult characteristicsResult = await _service
+            .GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
+        if (characteristicsResult.Status != GattCommunicationStatus.Success)
         {
-            _readCharacteristic = await FindCharacteristicAsync(_service, readUuid).ConfigureAwait(false);
-        }
-        if (Guid.TryParse(settings.WriteCharacteristicUuid, out Guid writeUuid))
-        {
-            _writeCharacteristic = await FindCharacteristicAsync(_service, writeUuid).ConfigureAwait(false);
+            throw new IOException($"读取 BLE 特征值失败：{characteristicsResult.Status}。 ");
         }
 
-        if (Guid.TryParse(settings.NotifyCharacteristicUuid, out Guid notifyUuid))
-        {
-            _notifyCharacteristic = await FindCharacteristicAsync(_service, notifyUuid).ConfigureAwait(false);
-        }
+        GattCharacteristic[] characteristics = characteristicsResult.Characteristics.ToArray();
+        _readCharacteristic = ResolveCharacteristic(
+            settings.ReadCharacteristicUuid,
+            characteristics,
+            characteristic => characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Read));
+        _writeCharacteristic = ResolveCharacteristic(
+            settings.WriteCharacteristicUuid,
+            characteristics,
+            characteristic => characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Write)
+                || characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse));
+        _notifyCharacteristic = ResolveCharacteristic(
+            settings.NotifyCharacteristicUuid,
+            characteristics,
+            characteristic => characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Notify)
+                || characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Indicate));
 
         if (settings.SubscribeOnConnect && _notifyCharacteristic is not null)
         {
             _notifyCharacteristic.ValueChanged += OnValueChanged;
-            GattCommunicationStatus status = await _notifyCharacteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
-                GattClientCharacteristicConfigurationDescriptorValue.Notify);
+            GattClientCharacteristicConfigurationDescriptorValue descriptor =
+                _notifyCharacteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Notify)
+                    ? GattClientCharacteristicConfigurationDescriptorValue.Notify
+                    : GattClientCharacteristicConfigurationDescriptorValue.Indicate;
+            GattCommunicationStatus status = await _notifyCharacteristic.WriteClientCharacteristicConfigurationDescriptorAsync(descriptor);
             if (status != GattCommunicationStatus.Success)
             {
                 throw new IOException($"订阅 BLE 通知失败：{status}。 ");
@@ -203,7 +399,10 @@ public sealed class BleGattTransport(BleGattTransportSettings settings) : Transp
         using DataWriter writer = new();
         writer.WriteBytes(data.ToArray());
         IBuffer buffer = writer.DetachBuffer();
-        GattWriteOption option = settings.WriteWithoutResponse ? GattWriteOption.WriteWithoutResponse : GattWriteOption.WriteWithResponse;
+        bool supportsWriteWithResponse = characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Write);
+        GattWriteOption option = settings.WriteWithoutResponse || !supportsWriteWithResponse
+            ? GattWriteOption.WriteWithoutResponse
+            : GattWriteOption.WriteWithResponse;
         GattWriteResult result = await characteristic.WriteValueWithResultAsync(buffer, option);
         if (result.Status != GattCommunicationStatus.Success)
         {
@@ -235,14 +434,21 @@ public sealed class BleGattTransport(BleGattTransportSettings settings) : Transp
         PublishReceived(data, DisplayName);
     }
 
-    private static async Task<GattCharacteristic?> FindCharacteristicAsync(GattDeviceService service, Guid uuid)
+    private static GattCharacteristic? ResolveCharacteristic(
+        string uuidText,
+        IReadOnlyList<GattCharacteristic> characteristics,
+        Func<GattCharacteristic, bool> fallbackPredicate)
     {
-        GattCharacteristicsResult result = await service.GetCharacteristicsForUuidAsync(uuid, BluetoothCacheMode.Uncached);
-        if (result.Status != GattCommunicationStatus.Success)
+        if (string.IsNullOrWhiteSpace(uuidText))
         {
-            throw new IOException($"读取 BLE 特征值失败：{result.Status}。 ");
+            return characteristics.FirstOrDefault(fallbackPredicate);
         }
 
-        return result.Characteristics.FirstOrDefault();
+        if (!Guid.TryParse(uuidText, out Guid uuid))
+        {
+            throw new FormatException($"BLE 特征值 UUID 无效：{uuidText}");
+        }
+
+        return characteristics.FirstOrDefault(characteristic => characteristic.Uuid == uuid);
     }
 }

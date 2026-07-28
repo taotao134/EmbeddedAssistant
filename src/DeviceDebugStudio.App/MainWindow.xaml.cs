@@ -36,11 +36,13 @@ public partial class MainWindow : Window
     private const double FrameLengthColumnMinWidth = 42;
     private const double FrameHexColumnMinWidth = 100;
     private const double FrameSummaryColumnMinWidth = 110;
+    private const double QuickCommandWheelPixelsPerDetent = 48;
     private static readonly TimeSpan ViewModelShutdownTimeout = TimeSpan.FromSeconds(3);
 
     private readonly MainWindowViewModel _viewModel;
     private readonly DataLogger _chartLogger;
     private readonly DispatcherTimer _chartRefreshTimer;
+    private readonly DispatcherTimer _quickCommandScrollTimer;
     private readonly List<double> _chartValues = [];
     private bool _chartDirty;
     private bool _closing;
@@ -53,12 +55,18 @@ public partial class MainWindow : Window
     private Point _quickCommandDragStartPoint;
     private QuickCommandItemViewModel? _quickCommandDragSource;
     private int? _quickCommandDropInsertionIndex;
+    private ScrollViewer? _quickCommandScrollViewer;
+    private double _quickCommandScrollTarget;
+    private bool _quickCommandScrollDirty;
     private bool _terminalColumnDragActive;
     private double _terminalViewportWidth;
     private int _terminalAutoScrollGeneration;
+    private bool _terminalAutoScrollSuspended;
     private bool _frameColumnDragActive;
     private double _frameViewportWidth;
     private bool _updatePromptVisible;
+    private ComboBox? _comboBoxPendingOpen;
+    private ComboBox? _openComboBox;
 
     private enum SidebarFocus
     {
@@ -72,6 +80,15 @@ public partial class MainWindow : Window
         _viewModel = viewModel;
         DataContext = viewModel;
         InitializeComponent();
+        AddHandler(
+            Mouse.PreviewMouseDownEvent,
+            new MouseButtonEventHandler(OnComboBoxPreviewMouseDown),
+            true);
+        AddHandler(
+            Mouse.PreviewMouseUpEvent,
+            new MouseButtonEventHandler(OnComboBoxPreviewMouseUp),
+            true);
+        Loaded += OnMainWindowLoaded;
         TerminalList.AddHandler(
             Thumb.DragDeltaEvent,
             new DragDeltaEventHandler(OnTerminalColumnHeaderDragDelta),
@@ -79,6 +96,10 @@ public partial class MainWindow : Window
         TerminalList.AddHandler(
             Thumb.DragCompletedEvent,
             new DragCompletedEventHandler(OnTerminalColumnHeaderDragCompleted),
+            true);
+        TerminalList.AddHandler(
+            ScrollBar.PreviewMouseDownEvent,
+            new MouseButtonEventHandler(OnTerminalScrollBarPreviewMouseDown),
             true);
         FrameList.AddHandler(
             Thumb.DragDeltaEvent,
@@ -88,6 +109,12 @@ public partial class MainWindow : Window
             Thumb.DragCompletedEvent,
             new DragCompletedEventHandler(OnFrameColumnHeaderDragCompleted),
             true);
+
+        _quickCommandScrollTimer = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(16)
+        };
+        _quickCommandScrollTimer.Tick += OnQuickCommandScrollTimerTick;
 
         _chartLogger = RealtimePlot.Plot.Add.DataLogger();
         _chartLogger.ViewSlide(240);
@@ -119,13 +146,180 @@ public partial class MainWindow : Window
         UpdateFrameColumnWidths();
     }
 
+    private void OnComboBoxPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left || e.OriginalSource is not DependencyObject source)
+        {
+            return;
+        }
+
+        ComboBox? comboBox = FindComboBoxAncestor(source);
+        if (comboBox is null
+            || !comboBox.IsEnabled
+            || comboBox.IsDropDownOpen
+            || comboBox.IsEditable && IsInsideEditableTextBox(source, comboBox))
+        {
+            return;
+        }
+
+        _comboBoxPendingOpen = comboBox;
+        comboBox.Focus();
+        e.Handled = true;
+    }
+
+    private void OnComboBoxPreviewMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        ComboBox? comboBox = _comboBoxPendingOpen;
+        _comboBoxPendingOpen = null;
+        if (e.ChangedButton != MouseButton.Left || comboBox is null)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (!comboBox.IsEnabled || !comboBox.IsMouseOver)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+        {
+            if (comboBox.IsEnabled && comboBox.IsVisible)
+            {
+                PositionComboBoxPopup(comboBox);
+                TrackOpenComboBox(comboBox);
+                comboBox.IsDropDownOpen = true;
+            }
+        }));
+    }
+
+    private void TrackOpenComboBox(ComboBox comboBox)
+    {
+        if (ReferenceEquals(_openComboBox, comboBox))
+        {
+            return;
+        }
+
+        if (_openComboBox is not null)
+        {
+            _openComboBox.DropDownClosed -= OnTrackedComboBoxDropDownClosed;
+        }
+
+        _openComboBox = comboBox;
+        comboBox.DropDownClosed += OnTrackedComboBoxDropDownClosed;
+    }
+
+    private void OnTrackedComboBoxDropDownClosed(object? sender, EventArgs e)
+    {
+        if (sender is not ComboBox comboBox || !ReferenceEquals(_openComboBox, comboBox))
+        {
+            return;
+        }
+
+        comboBox.DropDownClosed -= OnTrackedComboBoxDropDownClosed;
+        _openComboBox = null;
+    }
+
+    private void CloseOpenComboBox()
+    {
+        _comboBoxPendingOpen = null;
+        ComboBox? comboBox = _openComboBox;
+        _openComboBox = null;
+        if (comboBox is null)
+        {
+            return;
+        }
+
+        comboBox.DropDownClosed -= OnTrackedComboBoxDropDownClosed;
+        comboBox.IsDropDownOpen = false;
+    }
+
+    private static void PositionComboBoxPopup(ComboBox comboBox)
+    {
+        if (!comboBox.IsVisible)
+        {
+            return;
+        }
+
+        Popup? popup = comboBox.Template.FindName("Popup", comboBox) as Popup
+            ?? comboBox.Template.FindName("PART_Popup", comboBox) as Popup
+            ?? FindVisualChild<Popup>(comboBox);
+        Point controlTopLeft = comboBox.PointToScreen(new Point(0, 0));
+        Point controlBottomRight = comboBox.PointToScreen(new Point(comboBox.ActualWidth, comboBox.ActualHeight));
+        System.Windows.Forms.Screen screen = System.Windows.Forms.Screen.FromPoint(
+            new System.Drawing.Point((int)Math.Round(controlTopLeft.X), (int)Math.Round(controlTopLeft.Y)));
+        System.Drawing.Rectangle workArea = screen.WorkingArea;
+        double scaleY = comboBox.ActualHeight > 0
+            ? Math.Max(1, (controlBottomRight.Y - controlTopLeft.Y) / comboBox.ActualHeight)
+            : 1;
+        double estimatedHeight = Math.Min(
+            comboBox.MaxDropDownHeight,
+            comboBox.Items.Count * Math.Max(comboBox.ActualHeight, 32) + 8);
+        double contentHeight = popup?.Child is FrameworkElement popupContent
+            ? Math.Max(popupContent.ActualHeight, popupContent.DesiredSize.Height)
+            : 0;
+        double desiredHeight = Math.Max(contentHeight, estimatedHeight) * scaleY;
+        double availableBelow = workArea.Bottom - controlBottomRight.Y;
+        double availableAbove = controlTopLeft.Y - workArea.Top;
+        PlacementMode placement = availableBelow < desiredHeight && availableAbove > availableBelow
+            ? PlacementMode.Top
+            : PlacementMode.Bottom;
+
+        comboBox.SetCurrentValue(Popup.PlacementProperty, placement);
+        if (popup is not null)
+        {
+            popup.HorizontalOffset = 0;
+            popup.VerticalOffset = 0;
+            popup.Placement = placement;
+        }
+    }
+
+    private static ComboBox? FindComboBoxAncestor(DependencyObject source)
+    {
+        for (DependencyObject? current = source; current is not null; current = GetVisualOrLogicalParent(current))
+        {
+            if (current is ComboBox comboBox)
+            {
+                return comboBox;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsInsideEditableTextBox(DependencyObject source, ComboBox comboBox)
+    {
+        for (DependencyObject? current = source;
+             current is not null && !ReferenceEquals(current, comboBox);
+             current = GetVisualOrLogicalParent(current))
+        {
+            if (current is TextBox)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static DependencyObject? GetVisualOrLogicalParent(DependencyObject source) =>
+        source is Visual
+            ? VisualTreeHelper.GetParent(source)
+            : LogicalTreeHelper.GetParent(source);
+
     protected override void OnClosed(EventArgs e)
     {
+        Loaded -= OnMainWindowLoaded;
+        _quickCommandScrollTimer.Stop();
+        _quickCommandScrollTimer.Tick -= OnQuickCommandScrollTimerTick;
         _viewModel.QuickCommandAdded -= OnQuickCommandAdded;
         _viewModel.UpdateAvailable -= OnUpdateAvailable;
         _viewModel.FrameRecords.CollectionChanged -= OnFrameRecordsCollectionChanged;
         base.OnClosed(e);
-        if (!Application.Current.Dispatcher.HasShutdownStarted)
+        bool hasVisibleWindow = Application.Current.Windows
+            .OfType<MainWindow>()
+            .Any(window => window.IsVisible);
+        if (!Application.Current.Dispatcher.HasShutdownStarted && !hasVisibleWindow)
         {
             Application.Current.Shutdown();
         }
@@ -142,8 +336,6 @@ public partial class MainWindow : Window
     {
         AppendTerminalPlainText(count);
         QueueTerminalAutoScroll();
-
-        UpdateTerminalColumnWidths();
     }
 
     private void OnTerminalDisplaySelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -158,21 +350,26 @@ public partial class MainWindow : Window
 
     private void QueueTerminalAutoScroll()
     {
-        int generation = ++_terminalAutoScrollGeneration;
-        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
+        if (_terminalAutoScrollSuspended)
         {
-            if (generation != _terminalAutoScrollGeneration || !_viewModel.AutoScroll)
+            return;
+        }
+
+        int generation = ++_terminalAutoScrollGeneration;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            if (generation != _terminalAutoScrollGeneration || !_viewModel.AutoScroll || _terminalAutoScrollSuspended)
             {
                 return;
             }
 
             if (TerminalDisplayTabs.SelectedItem == TerminalTableTab && TerminalList.Items.Count > 0)
             {
-                object lastItem = TerminalList.Items[^1];
-                TerminalList.UpdateLayout();
-                TerminalList.ScrollIntoView(lastItem);
-                TerminalList.UpdateLayout();
-                TerminalList.ScrollIntoView(lastItem);
+                ScrollViewer? viewer = FindVisualChild<ScrollViewer>(TerminalList);
+                if (viewer is not null)
+                {
+                    viewer.ScrollToVerticalOffset(viewer.ScrollableHeight);
+                }
             }
             else if (TerminalDisplayTabs.SelectedItem == TerminalPlainTextTab)
             {
@@ -187,8 +384,25 @@ public partial class MainWindow : Window
         UpdateTerminalColumnWidths();
     }
 
+    private void OnTerminalScrollBarPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _terminalAutoScrollSuspended = true;
+        _terminalAutoScrollGeneration++;
+    }
+
     private void OnTerminalListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        ScrollViewer? viewer = e.OriginalSource as ScrollViewer ?? FindVisualChild<ScrollViewer>(TerminalList);
+        if (viewer is not null && Math.Abs(e.ExtentHeightChange) < 0.01)
+        {
+            bool atBottom = viewer.VerticalOffset >= viewer.ScrollableHeight - 2;
+            _terminalAutoScrollSuspended = !atBottom;
+            if (_terminalAutoScrollSuspended)
+            {
+                _terminalAutoScrollGeneration++;
+            }
+        }
+
         double viewportWidth = GetTerminalViewportWidth();
         if (viewportWidth > 0 && Math.Abs(viewportWidth - _terminalViewportWidth) > 0.1)
         {
@@ -464,15 +678,24 @@ public partial class MainWindow : Window
 
     private void OnFrameRecordsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.Action is NotifyCollectionChangedAction.Add or NotifyCollectionChangedAction.Reset)
-        {
-            UpdateFrameColumnWidths();
-        }
+        // 帧记录批量到达时只更新集合，列宽由窗口尺寸/字体变化处理，避免每批数据触发整表布局。
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(MainWindowViewModel.ReceiveAsHex)
+        if (e.PropertyName == nameof(MainWindowViewModel.AutoScroll))
+        {
+            if (_viewModel.AutoScroll)
+            {
+                _terminalAutoScrollSuspended = false;
+                QueueTerminalAutoScroll();
+            }
+            else
+            {
+                _terminalAutoScrollGeneration++;
+            }
+        }
+        else if (e.PropertyName is nameof(MainWindowViewModel.ReceiveAsHex)
             or nameof(MainWindowViewModel.SearchText))
         {
             TerminalPlainTextBox.Clear();
@@ -714,6 +937,17 @@ public partial class MainWindow : Window
         }
 
         QuickCommandsList.SelectedItem = clickedCommand;
+        if (FindVisualParent<Button>(originalSource) is not null)
+        {
+            CommitQuickCommandEditorBindings(container);
+            TextBox? payloadTextBox = FindNamedTextBox(container, "QuickCommandPayloadTextBox");
+            if (payloadTextBox is not null
+                && !string.Equals(clickedCommand.Payload, payloadTextBox.Text, StringComparison.Ordinal))
+            {
+                clickedCommand.Payload = payloadTextBox.Text;
+            }
+        }
+
         Button? dragHandle = GetQuickCommandDragHandle(originalSource);
         if (dragHandle?.DataContext is not QuickCommandItemViewModel source)
         {
@@ -737,7 +971,6 @@ public partial class MainWindow : Window
         _ = Dispatcher.InvokeAsync(() =>
         {
             SelectQuickCommand(command);
-            QuickCommandsList.UpdateLayout();
             if (QuickCommandsList.ItemContainerGenerator.ContainerFromItem(command) is not ListBoxItem container)
             {
                 return;
@@ -775,9 +1008,22 @@ public partial class MainWindow : Window
         return null;
     }
 
+    private static void CommitQuickCommandEditorBindings(DependencyObject parent)
+    {
+        if (parent is TextBox { IsReadOnly: false } textBox)
+        {
+            textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        }
+
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            CommitQuickCommandEditorBindings(VisualTreeHelper.GetChild(parent, index));
+        }
+    }
+
     private void OnQuickCommandsListPreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        ScrollViewer? outer = FindVisualChild<ScrollViewer>(QuickCommandsList);
+        ScrollViewer? outer = _quickCommandScrollViewer ??= FindVisualChild<ScrollViewer>(QuickCommandsList);
         if (outer is null)
         {
             return;
@@ -791,10 +1037,74 @@ public partial class MainWindow : Window
             return;
         }
 
-        double wheelSteps = Math.Clamp(Math.Abs(e.Delta) / 120.0, 0.25, 1.0);
-        double offset = outer.VerticalOffset - Math.Sign(e.Delta) * 24.0 * wheelSteps;
-        outer.ScrollToVerticalOffset(Math.Clamp(offset, 0, outer.ScrollableHeight));
+        if (!_quickCommandScrollTimer.IsEnabled)
+        {
+            _quickCommandScrollTarget = outer.VerticalOffset;
+        }
+
+        double wheelDetents = e.Delta / 120.0;
+        _quickCommandScrollTarget = Math.Clamp(
+            _quickCommandScrollTarget - wheelDetents * QuickCommandWheelPixelsPerDetent,
+            0,
+            outer.ScrollableHeight);
+        _quickCommandScrollDirty = true;
+        _quickCommandScrollTimer.Start();
         e.Handled = true;
+    }
+
+    private void OnQuickCommandScrollTimerTick(object? sender, EventArgs e)
+    {
+        if (!_quickCommandScrollDirty)
+        {
+            _quickCommandScrollTimer.Stop();
+            return;
+        }
+
+        _quickCommandScrollDirty = false;
+        ScrollViewer? viewer = _quickCommandScrollViewer;
+        if (viewer is null)
+        {
+            _quickCommandScrollTimer.Stop();
+            return;
+        }
+
+        double target = Math.Clamp(_quickCommandScrollTarget, 0, viewer.ScrollableHeight);
+        if (Math.Abs(viewer.VerticalOffset - target) >= 0.5)
+        {
+            viewer.ScrollToVerticalOffset(target);
+        }
+    }
+
+    private void OnMainWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        Loaded -= OnMainWindowLoaded;
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(PrewarmBaudRateComboBox));
+    }
+
+    private void PrewarmBaudRateComboBox()
+    {
+        if (_closing || !BaudRateComboBox.IsLoaded)
+        {
+            return;
+        }
+
+        try
+        {
+            BaudRateComboBox.ApplyTemplate();
+            if (BaudRateComboBox.IsDropDownOpen)
+            {
+                return;
+            }
+
+            // 在空闲时创建一次 Popup 和项目容器，避免用户首次展开时承担模板初始化成本。
+            BaudRateComboBox.IsDropDownOpen = true;
+            BaudRateComboBox.UpdateLayout();
+            BaudRateComboBox.IsDropDownOpen = false;
+        }
+        catch (Exception exception)
+        {
+            Log.Debug(exception, "预热波特率下拉框失败");
+        }
     }
 
     private static bool CanScroll(ScrollViewer viewer, int delta)
@@ -1593,6 +1903,14 @@ public partial class MainWindow : Window
         _viewModel.ApplyTerminalThemeColors(next);
     }
 
+    private async void OnAddWindowClick(object sender, RoutedEventArgs e)
+    {
+        if (Application.Current is App app)
+        {
+            await app.OpenAdditionalWindowAsync(_viewModel.SelectedProfile?.Id);
+        }
+    }
+
     private void OnToggleCommandPanelClick(object sender, RoutedEventArgs e)
     {
         if (_sidebarFocus == SidebarFocus.Command)
@@ -1684,8 +2002,21 @@ public partial class MainWindow : Window
             return;
         }
 
+        CloseOpenComboBox();
         EnforcePanelLayout();
         UpdateFrameColumnWidths();
+    }
+
+    protected override void OnLocationChanged(EventArgs e)
+    {
+        CloseOpenComboBox();
+        base.OnLocationChanged(e);
+    }
+
+    protected override void OnStateChanged(EventArgs e)
+    {
+        CloseOpenComboBox();
+        base.OnStateChanged(e);
     }
 
     private void OnDeviceSplitterDragCompleted(object sender, DragCompletedEventArgs e)
@@ -1855,6 +2186,7 @@ public partial class MainWindow : Window
         _viewModel.ChartValueAdded -= OnChartValueAdded;
         _viewModel.RecordsAppended -= OnRecordsAppended;
         _viewModel.TerminalRecords.CollectionChanged -= OnTerminalRecordsCollectionChanged;
+        _viewModel.FrameRecords.CollectionChanged -= OnFrameRecordsCollectionChanged;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
         try
         {

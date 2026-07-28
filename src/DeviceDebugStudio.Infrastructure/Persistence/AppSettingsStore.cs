@@ -31,6 +31,7 @@ public sealed record AppSettings
     public string TerminalBackgroundColor { get; init; } = "#FFFFFF";
     public string GitHubRepository { get; init; } = DefaultGitHubRepository;
     public bool AutoUpdateEnabled { get; init; } = true;
+    public bool DebugLoggingEnabled { get; init; }
     public List<string> TerminalTextPalette { get; init; } =
         ["#111111", "#7FE2B8", "#F7C574", "#9CDCFE", "#DCDCAA", "#FF8F8F", "#C586C0", "#7AA2F7"];
     public List<string> TerminalBackgroundPalette { get; init; } =
@@ -39,6 +40,7 @@ public sealed record AppSettings
 
 public sealed class AppSettingsStore
 {
+    private static readonly SemaphoreSlim SaveLock = new(1, 1);
     private readonly string _path = Path.Combine(AppPaths.LocalDataDirectory, "settings.json");
     private readonly JsonSerializerOptions _options = new() { WriteIndented = true };
 
@@ -63,11 +65,19 @@ public sealed class AppSettingsStore
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
     {
-        string temporary = _path + ".tmp";
-        await using (FileStream stream = new(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+        await SaveLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            await JsonSerializer.SerializeAsync(stream, settings, _options, cancellationToken).ConfigureAwait(false);
+            string temporary = _path + ".tmp";
+            await using (FileStream stream = new(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+            {
+                await JsonSerializer.SerializeAsync(stream, settings, _options, cancellationToken).ConfigureAwait(false);
+            }
+            File.Move(temporary, _path, true);
         }
-        File.Move(temporary, _path, true);
+        finally
+        {
+            SaveLock.Release();
+        }
     }
 }

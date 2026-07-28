@@ -18,8 +18,9 @@ public sealed class HardwareAndPerformanceTests(ITestOutputHelper output)
         BleDeviceInfo updated = device.MergeAdvertisement(string.Empty, -55);
 
         Assert.Equal("atao", updated.Name);
-        Assert.Equal("atao", updated.DisplayName);
+        Assert.Equal("atao (41348241E559)", updated.DisplayName);
         Assert.Equal(-55, updated.Rssi);
+        Assert.True(updated.Source.HasFlag(BleDeviceDiscoverySource.Advertisement));
     }
 
     [Fact]
@@ -30,7 +31,7 @@ public sealed class HardwareAndPerformanceTests(ITestOutputHelper output)
         BleDeviceInfo updated = device.MergeAdvertisement(" atao ", -55);
 
         Assert.Equal("atao", updated.Name);
-        Assert.Equal("atao", updated.DisplayName);
+        Assert.Equal("atao (41348241E559)", updated.DisplayName);
     }
 
     [Fact]
@@ -41,7 +42,8 @@ public sealed class HardwareAndPerformanceTests(ITestOutputHelper output)
         BleDeviceInfo updated = device.WithSystemDisplayName(" atao ");
 
         Assert.Equal("atao", updated.Name);
-        Assert.Equal("atao", updated.DisplayName);
+        Assert.Equal("atao (41348241E559)", updated.DisplayName);
+        Assert.True(updated.Source.HasFlag(BleDeviceDiscoverySource.System));
     }
 
     [Fact]
@@ -49,7 +51,22 @@ public sealed class HardwareAndPerformanceTests(ITestOutputHelper output)
     {
         BleDeviceInfo device = new(0x41348241E559, string.Empty, -55);
 
-        Assert.Equal("未知设备", device.DisplayName);
+        Assert.Equal("未知设备 (41348241E559)", device.DisplayName);
+    }
+
+    [Fact]
+    public void BleSystemMergeKeepsAdvertisementAndMarksSystemSource()
+    {
+        BleDeviceInfo device = new(0x41348241E559, "adv", -40, BleDeviceDiscoverySource.Advertisement);
+
+        BleDeviceInfo updated = device.MergeSystem("system-name");
+
+        Assert.Equal("system-name", updated.Name);
+        Assert.Equal(-40, updated.Rssi);
+        Assert.Equal(
+            BleDeviceDiscoverySource.Advertisement | BleDeviceDiscoverySource.System,
+            updated.Source);
+        Assert.Equal("广播+系统", updated.SourceText);
     }
 
     [Fact]

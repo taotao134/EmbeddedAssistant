@@ -29,7 +29,9 @@ public partial class App : Application
         ["#FFFFFF", "#F5F5F5", "#000000", "#1E293B", "#173A34", "#312544", "#443125", "#141817"];
 
     private static readonly TimeSpan HostShutdownTimeout = TimeSpan.FromSeconds(3);
+    private static readonly object DiagnosticLoggerLock = new();
     private static int _errorDialogVisible;
+    private static int _diagnosticLoggingEnabled;
     private IHost? _host;
     private Mutex? _instanceMutex;
 
@@ -50,14 +52,16 @@ public partial class App : Application
 
         _instanceMutex = instanceMutex;
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-        Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Information()
-            .WriteTo.File(
-                Path.Combine(AppPaths.DiagnosticsDirectory, "DeviceDebugStudio-.log"),
-                rollingInterval: RollingInterval.Day,
-                retainedFileCountLimit: 14,
-                shared: true)
-            .CreateLogger();
+        AppSettings startupSettings;
+        try
+        {
+            startupSettings = await new AppSettingsStore().LoadAsync();
+        }
+        catch
+        {
+            startupSettings = new AppSettings();
+        }
+        ConfigureDiagnosticLogging(startupSettings.DebugLoggingEnabled);
 
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
@@ -74,10 +78,10 @@ public partial class App : Application
                 services.AddSingleton<DeviceProfileFileService>();
                 services.AddSingleton<CaptureFileReader>();
                 services.AddSingleton<OnlineUpdateService>();
-                services.AddSingleton<BleDiscoveryService>();
-                services.AddSingleton<BleGattBrowserService>();
-                services.AddSingleton<MainWindowViewModel>();
-                services.AddSingleton<MainWindow>();
+                services.AddTransient<BleDiscoveryService>();
+                services.AddTransient<BleGattBrowserService>();
+                services.AddTransient<MainWindowViewModel>();
+                services.AddTransient<MainWindow>();
             })
             .Build();
 
@@ -88,13 +92,10 @@ public partial class App : Application
             ApplicationTheme theme = systemTheme == SystemTheme.Dark ? ApplicationTheme.Dark : ApplicationTheme.Light;
             ApplyTheme(theme);
 
-            AppSettings startupSettings = await _host.Services
-                .GetRequiredService<AppSettingsStore>()
-                .LoadAsync();
             ApplyTerminalColorsForTheme(theme, startupSettings.TerminalTextColor, startupSettings.TerminalBackgroundColor);
 
-            MainWindowViewModel viewModel = _host.Services.GetRequiredService<MainWindowViewModel>();
             MainWindow mainWindow = _host.Services.GetRequiredService<MainWindow>();
+            MainWindowViewModel viewModel = (MainWindowViewModel)mainWindow.DataContext;
             MainWindow = mainWindow;
             mainWindow.Show();
             Log.Information("主窗口已显示，启动耗时 {ElapsedMilliseconds} ms", startupStopwatch.ElapsedMilliseconds);
@@ -168,6 +169,40 @@ public partial class App : Application
             Log.Information("应用退出流程完成");
             Log.CloseAndFlush();
             base.OnExit(e);
+        }
+    }
+
+    public async Task OpenAdditionalWindowAsync(Guid? preferredProfileId = null)
+    {
+        if (_host is null)
+        {
+            return;
+        }
+
+        MainWindow window = _host.Services.GetRequiredService<MainWindow>();
+        int windowNumber = Current.Windows.OfType<MainWindow>().Count() + 1;
+        window.Title = $"嵌入式调试台 - 窗口 {windowNumber}";
+        window.Show();
+
+        if (window.DataContext is MainWindowViewModel viewModel)
+        {
+            try
+            {
+                AppSettings settings = await _host.Services
+                    .GetRequiredService<AppSettingsStore>()
+                    .LoadAsync();
+                if (preferredProfileId is not null)
+                {
+                    settings = settings with { SelectedProfileId = preferredProfileId };
+                }
+                await viewModel.InitializeAsync(settings);
+            }
+            catch (Exception exception)
+            {
+                Log.Error(exception, "新调试窗口初始化失败");
+                MessageBox.Show(window, $"新窗口初始化失败：{exception.Message}", "窗口初始化失败", MessageBoxButton.OK, MessageBoxImage.Error);
+                window.Close();
+            }
         }
     }
 
@@ -254,6 +289,72 @@ public partial class App : Application
         string normalizedBackground = NormalizeTerminalColor(backgroundColor, DefaultTerminalBackgroundColor);
         SetResourceBrushColor("TerminalTextBrush", normalizedText);
         SetResourceBrushColor("TerminalBackgroundBrush", normalizedBackground);
+    }
+
+    public static bool DiagnosticLoggingEnabled => Volatile.Read(ref _diagnosticLoggingEnabled) != 0;
+
+    public static void ConfigureDiagnosticLogging(bool enabled)
+    {
+        lock (DiagnosticLoggerLock)
+        {
+            Serilog.ILogger previous = Log.Logger;
+            Log.Logger = enabled
+                ? new LoggerConfiguration()
+                    .MinimumLevel.Debug()
+                    .WriteTo.File(
+                        Path.Combine(AppPaths.DiagnosticsDirectory, "DeviceDebugStudio-.log"),
+                        rollingInterval: RollingInterval.Day,
+                        retainedFileCountLimit: 14,
+                        shared: true)
+                    .CreateLogger()
+                : new LoggerConfiguration().CreateLogger();
+            Interlocked.Exchange(ref _diagnosticLoggingEnabled, enabled ? 1 : 0);
+            try
+            {
+                if (enabled)
+                {
+                    File.WriteAllText(AppPaths.DebugLoggingMarkerPath, "enabled");
+                }
+                else if (File.Exists(AppPaths.DebugLoggingMarkerPath))
+                {
+                    File.Delete(AppPaths.DebugLoggingMarkerPath);
+                }
+            }
+            catch
+            {
+            }
+            (previous as IDisposable)?.Dispose();
+        }
+    }
+
+    public static int ClearDiagnosticLogs()
+    {
+        bool restoreLogging = DiagnosticLoggingEnabled;
+        ConfigureDiagnosticLogging(false);
+        int removed = DeleteLogFiles(AppPaths.DiagnosticsDirectory)
+            + DeleteLogFiles(AppPaths.UpdateDiagnosticsDirectory);
+        if (restoreLogging)
+        {
+            ConfigureDiagnosticLogging(true);
+        }
+        return removed;
+    }
+
+    private static int DeleteLogFiles(string directory)
+    {
+        int removed = 0;
+        foreach (string path in Directory.EnumerateFiles(directory, "*.log", SearchOption.TopDirectoryOnly))
+        {
+            try
+            {
+                File.Delete(path);
+                removed++;
+            }
+            catch
+            {
+            }
+        }
+        return removed;
     }
 
     public static void ApplyTerminalColorsForTheme(

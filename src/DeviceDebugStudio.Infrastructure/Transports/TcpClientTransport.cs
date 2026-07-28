@@ -53,7 +53,6 @@ public sealed class TcpClientTransport(TcpClientTransportSettings settings) : Tr
         try
         {
             await stream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {

@@ -146,6 +146,25 @@
                             <TextBlock Text="GitHub 更新" />
                         </RadioButton>
                     </StackPanel>
+
+                    <ToggleButton x:Name="DiagnosticsCategoryToggle"
+                                  IsChecked="True"
+                                  Style="{StaticResource SettingsNavigationCategoryStyle}"
+                                  ToolTip="展开或收起诊断设置">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Margin="0,0,7,0" Symbol="Bug20" />
+                            <TextBlock Text="诊断" />
+                        </StackPanel>
+                    </ToggleButton>
+                    <StackPanel Margin="12,0,0,0"
+                                Visibility="{Binding IsChecked, ElementName=DiagnosticsCategoryToggle, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <RadioButton GroupName="SettingsNavigation"
+                                     Style="{StaticResource SettingsNavigationPageStyle}"
+                                     Tag="Diagnostics"
+                                     Checked="OnNavigationPageChecked">
+                            <TextBlock Text="日志与反馈" />
+                        </RadioButton>
+                    </StackPanel>
                 </StackPanel>
             </Grid>
         </Border>
@@ -340,24 +359,159 @@
                                Foreground="{DynamicResource MutedTextBrush}"
                                Text="检查更新按钮位于主窗口顶部工具栏。" />
                 </Grid>
+
+                <Grid x:Name="DiagnosticsPage"
+                      Margin="30,24,34,24"
+                      Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="日志与诊断" />
+
+                    <Border Grid.Row="1"
+                            Margin="0,24,0,0"
+                            Padding="16,14"
+                            Background="{DynamicResource PanelBackgroundBrush}"
+                            BorderBrush="{DynamicResource DividerBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock FontSize="15" FontWeight="SemiBold" Text="调试日志" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               Text="通用日志与串口工作进程日志" />
+                                </StackPanel>
+                                <ui:ToggleSwitch x:Name="DebugLoggingToggle"
+                                                 Grid.Column="1"
+                                                 VerticalAlignment="Center"
+                                                 Content="开启"
+                                                 Click="OnDebugLoggingClick" />
+                            </Grid>
+                            <Grid Grid.Row="1" Margin="0,16,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="112" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock VerticalAlignment="Center" Text="日志目录" />
+                                <TextBlock Grid.Column="1"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           Text="{Binding DiagnosticsDirectory}"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding DiagnosticsDirectory}" />
+                            </Grid>
+                            <Grid Grid.Row="2" Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="112" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock VerticalAlignment="Center" Text="更新失败日志" />
+                                <TextBlock Grid.Column="1"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           Text="始终自动保存" />
+                            </Grid>
+                            <StackPanel Grid.Row="3" Margin="0,16,0,0" Orientation="Horizontal">
+                                <Button Margin="0,0,8,0" Padding="11,6" Click="OnOpenDiagnosticFolderClick">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="FolderOpen20" />
+                                        <TextBlock Margin="6,0,0,0" Text="打开目录" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Padding="11,6" Click="OnClearDiagnosticLogsClick">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="Delete20" />
+                                        <TextBlock Margin="6,0,0,0" Text="清空日志" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="2"
+                            Margin="0,14,0,0"
+                            Padding="16,14"
+                            Background="{DynamicResource PanelBackgroundBrush}"
+                            BorderBrush="{DynamicResource DividerBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock FontSize="15" FontWeight="SemiBold" Text="问题反馈" />
+                                <TextBlock Margin="0,4,0,0"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           Text="诊断包不会自动上传" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button Margin="0,0,8,0" Padding="11,6" Click="OnExportDiagnosticBundleClick">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="Save20" />
+                                        <TextBlock Margin="6,0,0,0" Text="导出诊断包" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Padding="11,6" Click="OnOpenGitHubIssueClick">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="Send20" />
+                                        <TextBlock Margin="6,0,0,0" Text="GitHub 提交问题" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                    <TextBlock x:Name="DiagnosticsStatusText"
+                               Grid.Row="3"
+                               Margin="0,12,0,0"
+                               Foreground="{DynamicResource MutedTextBrush}"
+                               TextTrimming="CharacterEllipsis" />
+                </Grid>
             </Grid>
         </ScrollViewer>
 
         <Border Grid.Row="1"
                 Grid.Column="1"
-                Padding="30,12,34,16"
+                Padding="30,9,34,11"
                 Background="{DynamicResource PanelBackgroundBrush}"
                 BorderBrush="{DynamicResource DividerBrush}"
                 BorderThickness="0,1,0,0">
-            <DockPanel>
-                <Button DockPanel.Dock="Left" Padding="12,6" Click="OnResetClick">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Padding="12,6" Click="OnResetClick">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="ArrowReset20" />
                         <TextBlock Margin="6,0,0,0" Text="恢复当前页默认值" />
                     </StackPanel>
                 </Button>
-                <Button DockPanel.Dock="Right" Padding="18,6" IsDefault="True" Click="OnCloseClick" Content="完成" />
-            </DockPanel>
+                <Button Grid.Column="2"
+                        MinWidth="88"
+                        Padding="18,6"
+                        Style="{StaticResource PrimaryButtonStyle}"
+                        IsDefault="True"
+                        Click="OnCloseClick"
+                        Content="完成" />
+            </Grid>
         </Border>
     </Grid>
 </Window>

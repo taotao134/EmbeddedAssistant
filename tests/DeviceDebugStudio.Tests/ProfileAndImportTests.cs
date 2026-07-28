@@ -31,7 +31,8 @@ public sealed class ProfileAndImportTests
             FrameHexColumnWidth = 280,
             FrameSummaryColumnWidth = 420,
             GitHubRepository = "acme/device-debug-studio",
-            AutoUpdateEnabled = false
+            AutoUpdateEnabled = false,
+            DebugLoggingEnabled = true
         };
 
         string json = JsonSerializer.Serialize(settings);
@@ -48,6 +49,7 @@ public sealed class ProfileAndImportTests
         Assert.Equal(420, loaded.FrameSummaryColumnWidth);
         Assert.Equal("acme/device-debug-studio", loaded.GitHubRepository);
         Assert.False(loaded.AutoUpdateEnabled);
+        Assert.True(loaded.DebugLoggingEnabled);
 
         AppSettings defaults = Assert.IsType<AppSettings>(JsonSerializer.Deserialize<AppSettings>("{}"));
         Assert.Equal(AppSettings.DefaultTerminalTimeColumnWidth, defaults.TerminalTimeColumnWidth);
@@ -60,6 +62,7 @@ public sealed class ProfileAndImportTests
         Assert.Equal("#FFFFFF", defaults.TerminalBackgroundPalette[0]);
         Assert.Equal(AppSettings.DefaultGitHubRepository, defaults.GitHubRepository);
         Assert.True(defaults.AutoUpdateEnabled);
+        Assert.False(defaults.DebugLoggingEnabled);
     }
 
     [Fact]
