@@ -59,6 +59,7 @@ public sealed class TransportPacketCoalescerTests
 
         TransportPacket merged = Assert.Single(result);
         Assert.Equal([0x70, 0x6F, 0x77, 0x65, 0x72, 0x0D, 0x0A], merged.Data);
+        Assert.Equal(startedAt.AddMilliseconds(2), merged.EndTimestamp);
     }
 
     [Fact]
@@ -133,5 +134,24 @@ public sealed class TransportPacketCoalescerTests
             TimeSpan.FromMilliseconds(10));
 
         Assert.Equal(3, result.Count);
+    }
+
+    [Fact]
+    public void CoalesceAdjacentReceives_PreservesLastMonotonicArrivalTimestamp()
+    {
+        DateTimeOffset displayedAt = DateTimeOffset.UtcNow;
+        long arrivedAt = Stopwatch.GetTimestamp();
+        long arrivedLater = arrivedAt + Math.Max(1, Stopwatch.Frequency / 1000);
+        TransportPacket[] packets =
+        [
+            new(displayedAt, PacketDirection.Receive, [0x41], "COM4", ArrivalTimestamp: arrivedAt),
+            new(displayedAt.AddMilliseconds(1), PacketDirection.Receive, [0x42], "COM4", ArrivalTimestamp: arrivedLater)
+        ];
+
+        TransportPacket merged = Assert.Single(TransportPacketCoalescer.CoalesceAdjacentReceives(
+            packets,
+            TimeSpan.FromMilliseconds(10)));
+
+        Assert.Equal(arrivedLater, merged.EndArrivalTimestamp);
     }
 }

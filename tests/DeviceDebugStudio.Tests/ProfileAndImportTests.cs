@@ -30,6 +30,10 @@ public sealed class ProfileAndImportTests
             FrameLengthColumnWidth = 48,
             FrameHexColumnWidth = 280,
             FrameSummaryColumnWidth = 420,
+            TerminalSeparatorEnabled = true,
+            TerminalSeparatorIntervalMs = 750,
+            TerminalSeparatorStyle = "#",
+            TerminalSeparatorColor = "#408060",
             GitHubRepository = "acme/device-debug-studio",
             AutoUpdateEnabled = false,
             DebugLoggingEnabled = true
@@ -47,6 +51,10 @@ public sealed class ProfileAndImportTests
         Assert.Equal(48, loaded.FrameLengthColumnWidth);
         Assert.Equal(280, loaded.FrameHexColumnWidth);
         Assert.Equal(420, loaded.FrameSummaryColumnWidth);
+        Assert.True(loaded.TerminalSeparatorEnabled);
+        Assert.Equal(750, loaded.TerminalSeparatorIntervalMs);
+        Assert.Equal("#", loaded.TerminalSeparatorStyle);
+        Assert.Equal("#408060", loaded.TerminalSeparatorColor);
         Assert.Equal("acme/device-debug-studio", loaded.GitHubRepository);
         Assert.False(loaded.AutoUpdateEnabled);
         Assert.True(loaded.DebugLoggingEnabled);
@@ -58,6 +66,10 @@ public sealed class ProfileAndImportTests
         Assert.Equal(AppSettings.DefaultFrameSummaryColumnWidth, defaults.FrameSummaryColumnWidth);
         Assert.Equal("#111111", defaults.TerminalTextColor);
         Assert.Equal("#FFFFFF", defaults.TerminalBackgroundColor);
+        Assert.False(defaults.TerminalSeparatorEnabled);
+        Assert.Equal(AppSettings.DefaultTerminalSeparatorIntervalMs, defaults.TerminalSeparatorIntervalMs);
+        Assert.Equal(AppSettings.DefaultTerminalSeparatorStyle, defaults.TerminalSeparatorStyle);
+        Assert.Equal(AppSettings.DefaultTerminalSeparatorColor, defaults.TerminalSeparatorColor);
         Assert.Equal("#111111", defaults.TerminalTextPalette[0]);
         Assert.Equal("#FFFFFF", defaults.TerminalBackgroundPalette[0]);
         Assert.Equal(AppSettings.DefaultGitHubRepository, defaults.GitHubRepository);
@@ -120,6 +132,7 @@ public sealed class ProfileAndImportTests
                 [
                     new QuickCommandGroup
                     {
+                        Category = QuickCommandCategory.Bluetooth,
                         Commands =
                         [
                             new QuickCommand
@@ -150,6 +163,7 @@ public sealed class ProfileAndImportTests
             Assert.Equal("状态", loaded.FrameTemplates[0].Name);
             Assert.Equal("01", loaded.FrameTemplates[0].MatchHex);
             Assert.Equal("状态码", loaded.FrameTemplates[0].Fields[0].Name);
+            Assert.Equal(QuickCommandCategory.Bluetooth, loaded.CommandGroups[0].Category);
             Assert.Equal("查询", loaded.CommandGroups[0].Commands[0].Name);
             Assert.Equal(12, loaded.CommandGroups[0].Commands[0].UsageCount);
             Assert.Equal(96, loaded.CommandGroups[0].Commands[0].NameColumnWeight);
@@ -192,6 +206,7 @@ public sealed class ProfileAndImportTests
             SerialTransportSettings transport = Assert.IsType<SerialTransportSettings>(profile.Transport);
             Assert.Equal("COM3", transport.PortName);
             QuickCommand command = Assert.Single(profile.CommandGroups[0].Commands);
+            Assert.Equal(QuickCommandCategory.Sscom, profile.CommandGroups[0].Category);
             Assert.Equal("状态查询", command.Name);
             Assert.Equal("AT", command.Payload);
             Assert.Equal(500, command.RepeatIntervalMs);
@@ -378,6 +393,60 @@ public sealed class ProfileAndImportTests
         finally
         {
             Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task ProfileStoreUsesWorkspaceNameAndRemovesPreviousFileAfterRename()
+    {
+        string directory = CreateTemporaryDirectory();
+        try
+        {
+            JsonDeviceProfileStore store = new(directory);
+            DeviceProfile profile = new() { Name = "串口:测试/设备" };
+
+            await store.SaveAsync(profile);
+
+            string firstPath = Path.Combine(directory, "串口_测试_设备.json");
+            Assert.True(File.Exists(firstPath));
+
+            await store.SaveAsync(profile with { Name = "改名后的设备" });
+
+            string renamedPath = Path.Combine(directory, "改名后的设备.json");
+            Assert.True(File.Exists(renamedPath));
+            Assert.False(File.Exists(firstPath));
+            Assert.Single(Directory.EnumerateFiles(directory, "*.json"));
+            Assert.Equal("改名后的设备", Assert.Single(await store.LoadAllAsync()).Name);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task ProfileStoreMigratesExistingGuidFileNameWhenLoading()
+    {
+        string directory = CreateTemporaryDirectory();
+        try
+        {
+            JsonDeviceProfileStore store = new(directory);
+            DeviceProfile profile = new() { Name = "历史设备" };
+            await store.SaveAsync(profile);
+
+            string workspacePath = Path.Combine(directory, "历史设备.json");
+            string legacyPath = Path.Combine(directory, $"{profile.Id:N}.json");
+            File.Move(workspacePath, legacyPath);
+
+            DeviceProfile loaded = Assert.Single(await store.LoadAllAsync());
+
+            Assert.Equal(profile.Id, loaded.Id);
+            Assert.True(File.Exists(workspacePath));
+            Assert.False(File.Exists(legacyPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
         }
     }
 

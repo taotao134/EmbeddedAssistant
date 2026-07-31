@@ -3,10 +3,11 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         Title="设置"
+        Icon="Assets/DeviceDebugStudio.ico"
         Width="820"
-        Height="520"
+        Height="620"
         MinWidth="720"
-        MinHeight="460"
+        MinHeight="500"
         WindowStartupLocation="CenterOwner">
     <Window.Resources>
         <Style x:Key="ColorSwatchButtonStyle" TargetType="Button" BasedOn="{StaticResource RoundedButtonStyle}">
@@ -178,6 +179,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                 <TextBlock FontSize="20" FontWeight="SemiBold" Text="终端显示" />
@@ -277,9 +279,66 @@
                              ToolTip="HEX 颜色，例如 #FFFFFF" />
                 </Grid>
 
-                <Border Grid.Row="4"
-                        Height="112"
-                        Margin="0,28,0,0"
+                <Grid Grid.Row="4" Margin="0,22,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="数据分隔线" />
+                    <ui:ToggleSwitch Grid.Column="1"
+                                     HorizontalAlignment="Left"
+                                     Content="开启"
+                                     IsChecked="{Binding TerminalSeparatorEnabled, Mode=TwoWay}" />
+                    <StackPanel Grid.Row="1"
+                                Grid.Column="1"
+                                Margin="0,10,0,0"
+                                Orientation="Horizontal"
+                                IsEnabled="{Binding TerminalSeparatorEnabled}">
+                        <TextBlock Margin="0,0,8,0" VerticalAlignment="Center" Text="空闲超过" />
+                        <ui:NumberBox Width="176"
+                                      MinHeight="30"
+                                      Minimum="1"
+                                      Maximum="600000"
+                                      SmallChange="1"
+                                      LargeChange="100"
+                                      MaxDecimalPlaces="0"
+                                      SpinButtonPlacementMode="Compact"
+                                      Value="{Binding TerminalSeparatorIntervalMs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Margin="7,0,0,0" VerticalAlignment="Center" Text="ms" />
+                    </StackPanel>
+                    <StackPanel Grid.Row="2"
+                                Grid.Column="1"
+                                Margin="0,10,0,0"
+                                Orientation="Horizontal"
+                                IsEnabled="{Binding TerminalSeparatorEnabled}">
+                        <TextBlock Width="40" VerticalAlignment="Center" Text="样式" />
+                        <ComboBox Width="112"
+                                  ItemsSource="{Binding TerminalSeparatorStyles}"
+                                  DisplayMemberPath="DisplayText"
+                                  SelectedItem="{Binding SelectedTerminalSeparatorStyle, Mode=TwoWay}" />
+                        <TextBlock Width="40" Margin="24,0,0,0" VerticalAlignment="Center" Text="颜色" />
+                        <Button Style="{StaticResource ColorSwatchButtonStyle}"
+                                Background="{Binding TerminalSeparatorColor}"
+                                ToolTip="打开分隔线颜色调色盘"
+                                Click="OnOpenSeparatorColorPaletteClick" />
+                        <TextBox x:Name="TerminalSeparatorColorTextBox"
+                                 Width="112"
+                                 MaxLength="9"
+                                 FontFamily="Cascadia Mono, Consolas"
+                                 Text="{Binding TerminalSeparatorColor, UpdateSourceTrigger=PropertyChanged}"
+                                 LostKeyboardFocus="OnTerminalSeparatorColorLostFocus"
+                                 ToolTip="HEX 颜色，例如 #6F7A74" />
+                    </StackPanel>
+                </Grid>
+
+                <Border Grid.Row="5"
+                        Height="140"
+                        Margin="0,24,0,0"
                         Padding="16,12"
                         Background="{DynamicResource TerminalBackgroundBrush}"
                         BorderBrush="{DynamicResource DividerBrush}"
@@ -290,12 +349,25 @@
                         <TextBlock FontFamily="Cascadia Mono, Consolas"
                                    FontSize="{Binding TerminalFontSize}"
                                    Foreground="{DynamicResource TerminalTextBrush}"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="12:34:56.789  RX  COM6  power_value=1401"
                                    Text="12:34:56.789  RX  COM6  power_value=1401" />
-                        <TextBlock Margin="0,8,0,0"
+                        <TextBlock Margin="0,7,0,0"
+                                   HorizontalAlignment="Stretch"
+                                   FontFamily="Cascadia Mono, Consolas"
+                                   FontSize="{Binding TerminalFontSize}"
+                                   Foreground="{DynamicResource TerminalSeparatorBrush}"
+                                   Text="{Binding TerminalSeparatorPreviewText}"
+                                   TextAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   Visibility="{Binding TerminalSeparatorEnabled, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <TextBlock Margin="0,7,0,0"
                                    FontFamily="Cascadia Mono, Consolas"
                                    FontSize="{Binding TerminalFontSize}"
                                    Foreground="{DynamicResource TerminalTextBrush}"
-                                   Text="12:34:56.812  TX  COM6  \x12\x33" />
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="12:34:58.046  RX  COM6  power_value=1402"
+                                   Text="12:34:58.046  RX  COM6  power_value=1402" />
                     </StackPanel>
                 </Border>
 

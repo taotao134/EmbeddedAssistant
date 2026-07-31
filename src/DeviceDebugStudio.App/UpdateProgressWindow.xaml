@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         Title="在线更新"
+        Icon="Assets/DeviceDebugStudio.ico"
         Width="440"
         Height="238"
         MinWidth="440"

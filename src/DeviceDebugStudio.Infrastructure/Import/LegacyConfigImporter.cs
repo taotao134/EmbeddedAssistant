@@ -176,6 +176,7 @@ public sealed class LegacyConfigImporter
                 new QuickCommandGroup
                 {
                     Name = "SSCOM 导入",
+                    Category = QuickCommandCategory.Sscom,
                     Commands = commands
                 }
             ]
@@ -230,7 +231,15 @@ public sealed class LegacyConfigImporter
             WorkspaceMode = WorkspaceMode.Network,
             Transport = new TcpClientTransportSettings(),
             Terminal = new TerminalPreferences { ReceiveAsHex = true },
-            CommandGroups = [new QuickCommandGroup { Name = "NetAssist 导入", Commands = commands }]
+            CommandGroups =
+            [
+                new QuickCommandGroup
+                {
+                    Name = "NetAssist 导入",
+                    Category = QuickCommandCategory.Tcp,
+                    Commands = commands
+                }
+            ]
         };
     }
 

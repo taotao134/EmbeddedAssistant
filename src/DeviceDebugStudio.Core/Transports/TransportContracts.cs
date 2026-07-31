@@ -119,6 +119,9 @@ public sealed record TransportPacket(
     bool? SentAsHex = null,
     long ArrivalTimestamp = 0)
 {
+    public DateTimeOffset EndTimestamp { get; init; } = Timestamp;
+    public long EndArrivalTimestamp { get; init; } = ArrivalTimestamp;
+
     public static TransportPacket Info(string message, string endpoint = "系统") =>
         new(DateTimeOffset.Now, PacketDirection.Information, [], endpoint, message, ArrivalTimestamp: Stopwatch.GetTimestamp());
 

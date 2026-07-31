@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Windows;
 using DeviceDebugStudio.Infrastructure.Updates;
+using Wpf.Ui.Appearance;
 
 namespace DeviceDebugStudio.App;
 
@@ -12,11 +13,18 @@ public partial class UpdateProgressWindow : Window
     public UpdateProgressWindow(UpdateCheckResult result)
     {
         InitializeComponent();
+        Title = $"在线更新 · {App.MainWindowTitle}";
         CurrentVersionText.Text = result.CurrentVersion.ToString(3);
         TargetVersionText.Text = result.LatestVersion.ToString(3);
         PackageText.Text = result.Manifest.PackageSize is long size && size > 0
             ? $"更新包大小：{FormatByteSize(size)}"
             : "更新包大小：读取中…";
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        App.ApplyWindowTitleBarTheme(this, ApplicationThemeManager.GetAppTheme());
     }
 
     public bool IsCancellationRequested { get; private set; }

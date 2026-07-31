@@ -14,6 +14,9 @@ public sealed record AppSettings
     public const double DefaultFrameLengthColumnWidth = 56;
     public const double DefaultFrameHexColumnWidth = 360;
     public const double DefaultFrameSummaryColumnWidth = 360;
+    public const int DefaultTerminalSeparatorIntervalMs = 1000;
+    public const string DefaultTerminalSeparatorStyle = "-";
+    public const string DefaultTerminalSeparatorColor = "#6F7A74";
 
     public string ProfileDirectory { get; init; } = AppPaths.ProfilesDirectory;
     public Guid? SelectedProfileId { get; init; }
@@ -29,6 +32,10 @@ public sealed record AppSettings
     public double FrameSummaryColumnWidth { get; init; } = DefaultFrameSummaryColumnWidth;
     public string TerminalTextColor { get; init; } = "#111111";
     public string TerminalBackgroundColor { get; init; } = "#FFFFFF";
+    public bool TerminalSeparatorEnabled { get; init; }
+    public int TerminalSeparatorIntervalMs { get; init; } = DefaultTerminalSeparatorIntervalMs;
+    public string TerminalSeparatorStyle { get; init; } = DefaultTerminalSeparatorStyle;
+    public string TerminalSeparatorColor { get; init; } = DefaultTerminalSeparatorColor;
     public string GitHubRepository { get; init; } = DefaultGitHubRepository;
     public bool AutoUpdateEnabled { get; init; } = true;
     public bool DebugLoggingEnabled { get; init; }

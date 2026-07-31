@@ -1,7 +1,9 @@
 using System.IO;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using DeviceDebugStudio.App.ViewModels;
 using DeviceDebugStudio.Core.Profiles;
@@ -19,17 +21,30 @@ namespace DeviceDebugStudio.App;
 
 public partial class App : Application
 {
+    static App()
+    {
+        System.Windows.Forms.Application.SetHighDpiMode(System.Windows.Forms.HighDpiMode.PerMonitorV2);
+    }
+
+    public const string ProductName = "嵌入式调试台";
     public const string DefaultTerminalTextColor = "#111111";
     public const string DefaultTerminalBackgroundColor = "#FFFFFF";
-    public const string DarkThemeTerminalTextColor = "#FFFFFF";
-    public const string DarkThemeTerminalBackgroundColor = "#000000";
+    public const string DefaultTerminalSeparatorColor = AppSettings.DefaultTerminalSeparatorColor;
+    public const string DarkThemeTerminalTextColor = "#F8FAFC";
+    public const string DarkThemeTerminalBackgroundColor = "#0B1220";
     public static IReadOnlyList<string> DefaultTerminalTextPalette { get; } =
         ["#111111", "#7FE2B8", "#F7C574", "#9CDCFE", "#DCDCAA", "#FF8F8F", "#C586C0", "#7AA2F7"];
     public static IReadOnlyList<string> DefaultTerminalBackgroundPalette { get; } =
         ["#FFFFFF", "#F5F5F5", "#000000", "#1E293B", "#173A34", "#312544", "#443125", "#141817"];
+    public static string ProductVersionText => $"v{typeof(App).Assembly.GetName().Version?.ToString(3) ?? "未知"}";
+    public static string MainWindowTitle => $"{ProductName} · {ProductVersionText}";
 
     private static readonly TimeSpan HostShutdownTimeout = TimeSpan.FromSeconds(3);
     private static readonly object DiagnosticLoggerLock = new();
+    private const int DwmwaUseImmersiveDarkModeBefore20H1 = 19;
+    private const int DwmwaUseImmersiveDarkMode = 20;
+    private const int DwmwaCaptionColor = 35;
+    private const int DwmwaTextColor = 36;
     private static int _errorDialogVisible;
     private static int _diagnosticLoggingEnabled;
     private IHost? _host;
@@ -92,7 +107,11 @@ public partial class App : Application
             ApplicationTheme theme = systemTheme == SystemTheme.Dark ? ApplicationTheme.Dark : ApplicationTheme.Light;
             ApplyTheme(theme);
 
-            ApplyTerminalColorsForTheme(theme, startupSettings.TerminalTextColor, startupSettings.TerminalBackgroundColor);
+            ApplyTerminalColorsForTheme(
+                theme,
+                startupSettings.TerminalTextColor,
+                startupSettings.TerminalBackgroundColor,
+                startupSettings.TerminalSeparatorColor);
 
             MainWindow mainWindow = _host.Services.GetRequiredService<MainWindow>();
             MainWindowViewModel viewModel = (MainWindowViewModel)mainWindow.DataContext;
@@ -181,7 +200,7 @@ public partial class App : Application
 
         MainWindow window = _host.Services.GetRequiredService<MainWindow>();
         int windowNumber = Current.Windows.OfType<MainWindow>().Count() + 1;
-        window.Title = $"嵌入式调试台 - 窗口 {windowNumber}";
+        window.Title = $"{MainWindowTitle} · 窗口 {windowNumber}";
         window.Show();
 
         if (window.DataContext is MainWindowViewModel viewModel)
@@ -260,36 +279,83 @@ public partial class App : Application
         ApplicationThemeManager.Apply(theme, UiWindowBackdropType.None, true);
         bool dark = theme == ApplicationTheme.Dark;
         Current.Resources["WorkspaceBackgroundBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#181B1A" : "#F4F6F4"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#0F172A" : "#F6F8FA"));
         Current.Resources["PanelBackgroundBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#202422" : "#FCFDFC"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#111827" : "#FFFFFF"));
         Current.Resources["SidebarBackgroundBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#242927" : "#ECEFEC"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#172033" : "#F8FAFC"));
         Current.Resources["DividerBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#39403C" : "#D7DDD8"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#28354A" : "#E2E8F0"));
         Current.Resources["MutedTextBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#A9B3AD" : "#66706A"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#94A3B8" : "#64748B"));
         Current.Resources["AccentSubtleBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#2400A896" : "#0F00796B"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#332563EB" : "#142563EB"));
         Current.Resources["AccentSoftBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#3D00A896" : "#2400796B"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#4D2563EB" : "#332563EB"));
         Current.Resources["NavigationHoverBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#303734" : "#E1E5E2"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#1E293B" : "#EFF6FF"));
         Current.Resources["NavigationSelectedBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#3A433E" : "#D3D8D5"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#203A6B" : "#E0ECFF"));
         Current.Resources["ButtonSurfaceBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#2A2F2C" : "#FFFFFF"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#162033" : "#FFFFFF"));
         Current.Resources["ButtonForegroundBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#EDF3EF" : "#22302A"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#E5E7EB" : "#0F172A"));
+
+        foreach (Window window in Current.Windows.OfType<Window>())
+        {
+            ApplyWindowTitleBarTheme(window, theme);
+        }
+    }
+
+    public static void ApplyWindowTitleBarTheme(Window window, ApplicationTheme theme)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        nint handle = new WindowInteropHelper(window).Handle;
+        if (handle == 0)
+        {
+            return;
+        }
+
+        int enabled = theme == ApplicationTheme.Dark ? 1 : 0;
+        int captionColor = theme == ApplicationTheme.Dark ? 0x000F172A : 0x00FFFFFF;
+        int textColor = theme == ApplicationTheme.Dark ? 0x00E5E7EB : 0x000F172A;
+        try
+        {
+            _ = DwmSetWindowAttribute(handle, DwmwaUseImmersiveDarkMode, ref enabled, sizeof(int));
+            _ = DwmSetWindowAttribute(handle, DwmwaUseImmersiveDarkModeBefore20H1, ref enabled, sizeof(int));
+            _ = DwmSetWindowAttribute(handle, DwmwaCaptionColor, ref captionColor, sizeof(int));
+            _ = DwmSetWindowAttribute(handle, DwmwaTextColor, ref textColor, sizeof(int));
+        }
+        catch (DllNotFoundException)
+        {
+        }
+        catch (EntryPointNotFoundException)
+        {
+        }
     }
 
     public static void ApplyTerminalColors(string textColor, string backgroundColor)
+    {
+        ApplyTerminalColors(textColor, backgroundColor, DefaultTerminalSeparatorColor);
+    }
+
+    public static void ApplyTerminalColors(string textColor, string backgroundColor, string separatorColor)
     {
         string normalizedText = NormalizeTerminalColor(textColor, DefaultTerminalTextColor);
         string normalizedBackground = NormalizeTerminalColor(backgroundColor, DefaultTerminalBackgroundColor);
         SetResourceBrushColor("TerminalTextBrush", normalizedText);
         SetResourceBrushColor("TerminalBackgroundBrush", normalizedBackground);
+        ApplyTerminalSeparatorColor(separatorColor);
     }
+
+    public static void ApplyTerminalSeparatorColor(string separatorColor) =>
+        SetResourceBrushColor(
+            "TerminalSeparatorBrush",
+            NormalizeTerminalColor(separatorColor, DefaultTerminalSeparatorColor));
 
     public static bool DiagnosticLoggingEnabled => Volatile.Read(ref _diagnosticLoggingEnabled) != 0;
 
@@ -360,15 +426,16 @@ public partial class App : Application
     public static void ApplyTerminalColorsForTheme(
         ApplicationTheme theme,
         string textColor,
-        string backgroundColor)
+        string backgroundColor,
+        string separatorColor)
     {
         if (theme == ApplicationTheme.Dark)
         {
-            ApplyTerminalColors(DarkThemeTerminalTextColor, DarkThemeTerminalBackgroundColor);
+            ApplyTerminalColors(DarkThemeTerminalTextColor, DarkThemeTerminalBackgroundColor, separatorColor);
             return;
         }
 
-        ApplyTerminalColors(textColor, backgroundColor);
+        ApplyTerminalColors(textColor, backgroundColor, separatorColor);
     }
 
     private static void SetResourceBrushColor(string resourceKey, string colorText)
@@ -411,6 +478,13 @@ public partial class App : Application
             return false;
         }
     }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(
+        nint windowHandle,
+        int attribute,
+        ref int value,
+        int valueSize);
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {

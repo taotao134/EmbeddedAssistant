@@ -12,24 +12,25 @@
 
             <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
 
-            <SolidColorBrush x:Key="WorkspaceBackgroundBrush" Color="#F2F2F2" />
+            <SolidColorBrush x:Key="WorkspaceBackgroundBrush" Color="#EEF2F6" />
             <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#F7F7F7" />
-            <SolidColorBrush x:Key="DividerBrush" Color="#C8C8C8" />
-            <SolidColorBrush x:Key="AccentBrush" Color="#303030" />
-            <SolidColorBrush x:Key="AccentHoverBrush" Color="#000000" />
-            <SolidColorBrush x:Key="AccentSubtleBrush" Color="#10000000" />
-            <SolidColorBrush x:Key="AccentSoftBrush" Color="#22000000" />
-            <SolidColorBrush x:Key="NavigationHoverBrush" Color="#E1E5E2" />
-            <SolidColorBrush x:Key="NavigationSelectedBrush" Color="#D3D8D5" />
-            <SolidColorBrush x:Key="MutedTextBrush" Color="#555555" />
-            <SolidColorBrush x:Key="TerminalBackgroundBrush" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="TerminalTextBrush" Color="#111111" />
-            <SolidColorBrush x:Key="ReceiveBrush" Color="#18855E" />
-            <SolidColorBrush x:Key="SendBrush" Color="#B56C16" />
-            <SolidColorBrush x:Key="ErrorBrush" Color="#C23B3B" />
+            <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#E7EDF4" />
+            <SolidColorBrush x:Key="DividerBrush" Color="#CBD5E1" />
+            <SolidColorBrush x:Key="AccentBrush" Color="#2563EB" />
+            <SolidColorBrush x:Key="AccentHoverBrush" Color="#1D4ED8" />
+            <SolidColorBrush x:Key="AccentSubtleBrush" Color="#142563EB" />
+            <SolidColorBrush x:Key="AccentSoftBrush" Color="#332563EB" />
+            <SolidColorBrush x:Key="NavigationHoverBrush" Color="#EFF6FF" />
+            <SolidColorBrush x:Key="NavigationSelectedBrush" Color="#E0ECFF" />
+            <SolidColorBrush x:Key="MutedTextBrush" Color="#64748B" />
+            <SolidColorBrush x:Key="TerminalBackgroundBrush" Color="#111827" />
+            <SolidColorBrush x:Key="TerminalTextBrush" Color="#F8FAFC" />
+            <SolidColorBrush x:Key="TerminalSeparatorBrush" Color="#6F7A74" />
+            <SolidColorBrush x:Key="ReceiveBrush" Color="#16A34A" />
+            <SolidColorBrush x:Key="SendBrush" Color="#0284C7" />
+            <SolidColorBrush x:Key="ErrorBrush" Color="#DC2626" />
             <SolidColorBrush x:Key="ButtonSurfaceBrush" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="ButtonForegroundBrush" Color="#111111" />
+            <SolidColorBrush x:Key="ButtonForegroundBrush" Color="#0F172A" />
 
             <Style x:Key="RoundedButtonStyle" TargetType="Button">
                 <Setter Property="FocusVisualStyle" Value="{x:Null}" />
@@ -49,7 +50,7 @@
                                     Background="{TemplateBinding Background}"
                                     BorderBrush="{TemplateBinding BorderBrush}"
                                     BorderThickness="{TemplateBinding BorderThickness}"
-                                    CornerRadius="6"
+                                    CornerRadius="5"
                                     SnapsToDevicePixels="True">
                                 <ContentPresenter Margin="{TemplateBinding Padding}"
                                                   HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
@@ -103,6 +104,59 @@
                 <Setter Property="FontWeight" Value="Normal" />
             </Style>
 
+            <Style x:Key="ConnectionButtonStyle" TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="ButtonBorder"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="5"
+                                    SnapsToDevicePixels="True">
+                                <ContentPresenter Margin="{TemplateBinding Padding}"
+                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                  RecognizesAccessKey="True" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                    <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.94" />
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.78" />
+                                </Trigger>
+                                <Trigger Property="IsKeyboardFocused" Value="True">
+                                    <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                </Trigger>
+                                <DataTrigger Binding="{Binding DataContext.IsConnected, RelativeSource={RelativeSource TemplatedParent}}" Value="True">
+                                    <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource ErrorBrush}" />
+                                    <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource ErrorBrush}" />
+                                </DataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding DataContext.IsConnected, RelativeSource={RelativeSource TemplatedParent}}" Value="True" />
+                                        <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource TemplatedParent}}" Value="True" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource ErrorBrush}" />
+                                </MultiDataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding DataContext.IsConnected, RelativeSource={RelativeSource TemplatedParent}}" Value="True" />
+                                        <Condition Binding="{Binding IsKeyboardFocused, RelativeSource={RelativeSource TemplatedParent}}" Value="True" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource ErrorBrush}" />
+                                </MultiDataTrigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.42" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <Style x:Key="SectionLabelStyle" TargetType="TextBlock">
                 <Setter Property="FontSize" Value="11" />
                 <Setter Property="FontWeight" Value="Normal" />
@@ -127,7 +181,7 @@
                                     Background="{TemplateBinding Background}"
                                     BorderBrush="{TemplateBinding BorderBrush}"
                                     BorderThickness="{TemplateBinding BorderThickness}"
-                                    CornerRadius="6"
+                                    CornerRadius="5"
                                     SnapsToDevicePixels="True">
                                 <ScrollViewer x:Name="PART_ContentHost"
                                               Margin="{TemplateBinding Padding}"
@@ -167,6 +221,44 @@
                 <Setter Property="VerticalContentAlignment" Value="Center" />
             </Style>
 
+            <Style TargetType="TabItem">
+                <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="Padding" Value="12,6" />
+                <Setter Property="Margin" Value="0,0,4,0" />
+                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TabItem">
+                            <Border x:Name="TabBorder"
+                                    Padding="{TemplateBinding Padding}"
+                                    Margin="{TemplateBinding Margin}"
+                                    Background="Transparent"
+                                    BorderBrush="Transparent"
+                                    BorderThickness="0,0,0,2"
+                                    TextElement.Foreground="{TemplateBinding Foreground}">
+                                <ContentPresenter ContentSource="Header"
+                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource NavigationHoverBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter TargetName="TabBorder" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="TabBorder" Property="Opacity" Value="0.45" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <Style x:Key="TerminalCellTextBoxStyle" TargetType="TextBox">
                 <Setter Property="IsReadOnly" Value="True" />
                 <Setter Property="IsReadOnlyCaretVisible" Value="True" />
@@ -197,7 +289,7 @@
                 </Setter>
             </Style>
 
-            <Style x:Key="TerminalPlainTextBoxStyle" TargetType="TextBox">
+            <Style x:Key="TerminalPlainTextBoxStyle" TargetType="RichTextBox">
                 <Setter Property="IsReadOnly" Value="True" />
                 <Setter Property="IsReadOnlyCaretVisible" Value="True" />
                 <Setter Property="AcceptsReturn" Value="True" />
@@ -210,12 +302,11 @@
                 <Setter Property="FontSize" Value="12" />
                 <Setter Property="SelectionBrush" Value="#2B776E" />
                 <Setter Property="SelectionTextBrush" Value="White" />
-                <Setter Property="TextWrapping" Value="NoWrap" />
                 <Setter Property="HorizontalScrollBarVisibility" Value="Auto" />
                 <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
                 <Setter Property="Template">
                     <Setter.Value>
-                        <ControlTemplate TargetType="TextBox">
+                        <ControlTemplate TargetType="RichTextBox">
                             <Border Background="{TemplateBinding Background}"
                                     BorderBrush="{TemplateBinding BorderBrush}"
                                     BorderThickness="{TemplateBinding BorderThickness}"

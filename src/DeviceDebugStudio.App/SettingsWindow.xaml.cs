@@ -15,6 +15,7 @@ using DrawingColor = System.Drawing.Color;
 using WinFormsColorDialog = System.Windows.Forms.ColorDialog;
 using WinFormsDialogResult = System.Windows.Forms.DialogResult;
 using WinFormsIWin32Window = System.Windows.Forms.IWin32Window;
+using Wpf.Ui.Appearance;
 
 namespace DeviceDebugStudio.App;
 
@@ -28,7 +29,14 @@ public partial class SettingsWindow : Window
         _viewModel = viewModel;
         DataContext = viewModel;
         InitializeComponent();
+        Title = $"设置 · {App.MainWindowTitle}";
         DebugLoggingToggle.IsChecked = viewModel.DebugLoggingEnabled;
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        App.ApplyWindowTitleBarTheme(this, ApplicationThemeManager.GetAppTheme());
     }
 
     private void OnNavigationPageChecked(object sender, RoutedEventArgs e)
@@ -99,6 +107,12 @@ public partial class SettingsWindow : Window
             App.DefaultTerminalBackgroundColor,
             color => _viewModel.TerminalBackgroundColor = color);
 
+    private void OnOpenSeparatorColorPaletteClick(object sender, RoutedEventArgs e) =>
+        OpenColorPalette(
+            _viewModel.TerminalSeparatorColor,
+            App.DefaultTerminalSeparatorColor,
+            color => _viewModel.TerminalSeparatorColor = color);
+
     private void OpenColorPalette(string currentColor, string fallbackColor, Action<string> applyColor)
     {
         string normalized = App.NormalizeTerminalColor(currentColor, fallbackColor);
@@ -124,6 +138,18 @@ public partial class SettingsWindow : Window
 
     private void OnTerminalBackgroundColorLostFocus(object sender, RoutedEventArgs e) =>
         NormalizeColorTextBox(TerminalBackgroundColorTextBox, false);
+
+    private void OnTerminalSeparatorColorLostFocus(object sender, RoutedEventArgs e)
+    {
+        string normalized;
+        if (!App.TryNormalizeTerminalColor(TerminalSeparatorColorTextBox.Text, out normalized))
+        {
+            normalized = Application.Current.Resources["TerminalSeparatorBrush"] is SolidColorBrush brush
+                ? App.NormalizeTerminalColor(brush.Color.ToString(), App.DefaultTerminalSeparatorColor)
+                : App.DefaultTerminalSeparatorColor;
+        }
+        _viewModel.TerminalSeparatorColor = normalized;
+    }
 
     private void NormalizeColorTextBox(TextBox textBox, bool isTextColor)
     {

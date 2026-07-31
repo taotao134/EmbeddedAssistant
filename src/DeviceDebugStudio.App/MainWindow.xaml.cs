@@ -5,9 +5,11 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Threading;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using DeviceDebugStudio.App.ViewModels;
 using DeviceDebugStudio.Core.Transports;
 using DeviceDebugStudio.Infrastructure.Persistence;
@@ -17,10 +19,11 @@ using Microsoft.Win32;
 using ScottPlot.Plottables;
 using Serilog;
 using Wpf.Ui.Appearance;
+using FluentWindow = Wpf.Ui.Controls.FluentWindow;
 
 namespace DeviceDebugStudio.App;
 
-public partial class MainWindow : Window
+public partial class MainWindow : FluentWindow
 {
     private const double CommandPanelMinWidth = 480;
     private const double CommandPanelMaxWidth = 620;
@@ -38,6 +41,9 @@ public partial class MainWindow : Window
     private const double FrameSummaryColumnMinWidth = 110;
     private const double QuickCommandWheelPixelsPerDetent = 48;
     private static readonly TimeSpan ViewModelShutdownTimeout = TimeSpan.FromSeconds(3);
+    private static readonly Duration QuickCommandEditorTransitionDuration = new(TimeSpan.FromMilliseconds(150));
+    private static readonly Duration ThemeWipeDuration = new(TimeSpan.FromMilliseconds(260));
+    private static readonly Duration ThemeRevealDuration = new(TimeSpan.FromMilliseconds(100));
 
     private readonly MainWindowViewModel _viewModel;
     private readonly DataLogger _chartLogger;
@@ -58,15 +64,19 @@ public partial class MainWindow : Window
     private ScrollViewer? _quickCommandScrollViewer;
     private double _quickCommandScrollTarget;
     private bool _quickCommandScrollDirty;
+    private bool _quickCommandEditorExpanded;
+    private int _quickCommandEditorAnimationGeneration;
     private bool _terminalColumnDragActive;
     private double _terminalViewportWidth;
     private int _terminalAutoScrollGeneration;
     private bool _terminalAutoScrollSuspended;
+    private int _terminalPlainTextCharacterCount;
     private bool _frameColumnDragActive;
     private double _frameViewportWidth;
     private bool _updatePromptVisible;
     private ComboBox? _comboBoxPendingOpen;
     private ComboBox? _openComboBox;
+    private bool _themeTransitionActive;
 
     private enum SidebarFocus
     {
@@ -80,6 +90,7 @@ public partial class MainWindow : Window
         _viewModel = viewModel;
         DataContext = viewModel;
         InitializeComponent();
+        Title = App.MainWindowTitle;
         AddHandler(
             Mouse.PreviewMouseDownEvent,
             new MouseButtonEventHandler(OnComboBoxPreviewMouseDown),
@@ -110,7 +121,7 @@ public partial class MainWindow : Window
             new DragCompletedEventHandler(OnFrameColumnHeaderDragCompleted),
             true);
 
-        _quickCommandScrollTimer = new DispatcherTimer(DispatcherPriority.Render)
+        _quickCommandScrollTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromMilliseconds(16)
         };
@@ -144,6 +155,12 @@ public partial class MainWindow : Window
         _viewModel.UpdateAvailable += OnUpdateAvailable;
         UpdateTerminalColumnWidths();
         UpdateFrameColumnWidths();
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        App.ApplyWindowTitleBarTheme(this, ApplicationThemeManager.GetAppTheme());
     }
 
     private void OnComboBoxPreviewMouseDown(object sender, MouseButtonEventArgs e)
@@ -241,6 +258,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        comboBox.ApplyTemplate();
         Popup? popup = comboBox.Template.FindName("Popup", comboBox) as Popup
             ?? comboBox.Template.FindName("PART_Popup", comboBox) as Popup
             ?? FindVisualChild<Popup>(comboBox);
@@ -268,6 +286,9 @@ public partial class MainWindow : Window
         comboBox.SetCurrentValue(Popup.PlacementProperty, placement);
         if (popup is not null)
         {
+            // 在打开前使用淡入淡出，避免默认滑动与自定义上下定位同时发生。
+            popup.SetCurrentValue(Popup.AllowsTransparencyProperty, true);
+            popup.SetCurrentValue(Popup.PopupAnimationProperty, PopupAnimation.Fade);
             popup.HorizontalOffset = 0;
             popup.VerticalOffset = 0;
             popup.Placement = placement;
@@ -373,7 +394,11 @@ public partial class MainWindow : Window
             }
             else if (TerminalDisplayTabs.SelectedItem == TerminalPlainTextTab)
             {
-                TerminalPlainTextBox.CaretIndex = TerminalPlainTextBox.Text.Length;
+                if (!TerminalPlainTextBox.Selection.IsEmpty)
+                {
+                    return;
+                }
+                TerminalPlainTextBox.CaretPosition = TerminalPlainTextBox.Document.ContentEnd;
                 TerminalPlainTextBox.ScrollToEnd();
             }
         }));
@@ -597,52 +622,142 @@ public partial class MainWindow : Window
             return;
         }
 
+        bool hasSelection = !TerminalPlainTextBox.Selection.IsEmpty;
         int start = _viewModel.TerminalRecords.Count - actualCount;
-        StringBuilder builder = new(actualCount * 64);
-        for (int index = start; index < _viewModel.TerminalRecords.Count; index++)
+        AppendTerminalPlainTextEntries(BuildTerminalPlainTextEntries(start, actualCount));
+        if (_terminalPlainTextCharacterCount > 4_000_000)
         {
-            TerminalRecordItem item = _viewModel.TerminalRecords[index];
-            if (IsConnectionStatusRecord(item) || !_viewModel.IsTerminalRecordVisible(item))
-            {
-                continue;
-            }
-
-            string direction = item.Direction switch
-            {
-                PacketDirection.Send => "发→◇",
-                PacketDirection.Receive => "收←◆",
-                _ => item.DirectionText
-            };
-            string prefix = $"[{item.TimeText}]{direction}";
-            builder.Append(prefix);
-            string content = item.GetContinuousTextContent(_viewModel.ReceiveAsHex);
-            AppendAlignedContinuousContent(builder, content, prefix);
-            if (!content.EndsWith('\r') && !content.EndsWith('\n'))
-            {
-                builder.AppendLine();
-            }
+            RebuildTerminalPlainText(3_000_000);
+            hasSelection = false;
         }
 
-        int selectionStart = TerminalPlainTextBox.SelectionStart;
-        int selectionLength = TerminalPlainTextBox.SelectionLength;
-        TerminalPlainTextBox.AppendText(builder.ToString());
-        if (TerminalPlainTextBox.Text.Length > 4_000_000)
-        {
-            string retained = TerminalPlainTextBox.Text[^3_000_000..];
-            int firstLineEnd = retained.IndexOf('\n');
-            TerminalPlainTextBox.Text = firstLineEnd >= 0 ? retained[(firstLineEnd + 1)..] : retained;
-            selectionStart = 0;
-            selectionLength = 0;
-        }
-
-        if (selectionLength > 0)
-        {
-            TerminalPlainTextBox.Select(selectionStart, selectionLength);
-        }
-        else if (_viewModel.AutoScroll)
+        if (!hasSelection && _viewModel.AutoScroll)
         {
             TerminalPlainTextBox.ScrollToEnd();
         }
+    }
+
+    private List<(string Text, bool IsSeparator)> BuildTerminalPlainTextEntries(int start, int count)
+    {
+        List<(string Text, bool IsSeparator)> entries = new(count);
+        int end = Math.Min(_viewModel.TerminalRecords.Count, start + count);
+        for (int index = Math.Max(0, start); index < end; index++)
+        {
+            TerminalRecordItem item = _viewModel.TerminalRecords[index];
+            string text = FormatTerminalPlainTextRecord(item);
+            if (text.Length > 0)
+            {
+                entries.Add((text, item.IsSeparator));
+            }
+        }
+        return entries;
+    }
+
+    private string FormatTerminalPlainTextRecord(TerminalRecordItem item)
+    {
+        if (IsConnectionStatusRecord(item) || !_viewModel.IsTerminalRecordVisible(item))
+        {
+            return string.Empty;
+        }
+        if (item.IsSeparator)
+        {
+            return _viewModel.BuildTerminalSeparatorLine(item.SeparatorGapMilliseconds) + Environment.NewLine;
+        }
+
+        string direction = item.Direction switch
+        {
+            PacketDirection.Send => "发→◇",
+            PacketDirection.Receive => "收←◆",
+            _ => item.DirectionText
+        };
+        string prefix = $"[{item.TimeText}]{direction}";
+        StringBuilder builder = new(prefix.Length + item.Content.Length + 16);
+        builder.Append(prefix);
+        string content = item.GetContinuousTextContent(_viewModel.ReceiveAsHex);
+        AppendAlignedContinuousContent(builder, content, prefix);
+        if (!content.EndsWith('\r') && !content.EndsWith('\n'))
+        {
+            builder.AppendLine();
+        }
+        return builder.ToString();
+    }
+
+    private void AppendTerminalPlainTextEntries(IEnumerable<(string Text, bool IsSeparator)> entries)
+    {
+        Paragraph paragraph = GetTerminalPlainTextParagraph();
+        Brush terminalBrush = (Brush)FindResource("TerminalTextBrush");
+        Brush separatorBrush = (Brush)FindResource("TerminalSeparatorBrush");
+        StringBuilder terminalText = new();
+        foreach ((string text, bool isSeparator) in entries)
+        {
+            if (isSeparator)
+            {
+                AppendTerminalRun(paragraph, terminalText, terminalBrush);
+                paragraph.Inlines.Add(new Run(text) { Foreground = separatorBrush });
+                _terminalPlainTextCharacterCount += text.Length;
+            }
+            else
+            {
+                terminalText.Append(text);
+            }
+        }
+        AppendTerminalRun(paragraph, terminalText, terminalBrush);
+    }
+
+    private void AppendTerminalRun(Paragraph paragraph, StringBuilder builder, Brush foreground)
+    {
+        if (builder.Length == 0)
+        {
+            return;
+        }
+
+        string text = builder.ToString();
+        paragraph.Inlines.Add(new Run(text) { Foreground = foreground });
+        _terminalPlainTextCharacterCount += text.Length;
+        builder.Clear();
+    }
+
+    private Paragraph GetTerminalPlainTextParagraph()
+    {
+        if (TerminalPlainTextBox.Document.Blocks.LastBlock is Paragraph paragraph)
+        {
+            return paragraph;
+        }
+
+        paragraph = new Paragraph { Margin = new Thickness(0) };
+        TerminalPlainTextBox.Document.Blocks.Add(paragraph);
+        return paragraph;
+    }
+
+    private void ResetTerminalPlainTextDocument()
+    {
+        TerminalPlainTextBox.Document.Blocks.Clear();
+        TerminalPlainTextBox.Document.Blocks.Add(new Paragraph { Margin = new Thickness(0) });
+        _terminalPlainTextCharacterCount = 0;
+    }
+
+    private void RebuildTerminalPlainText(int maximumCharacters = int.MaxValue)
+    {
+        List<(string Text, bool IsSeparator)> entries = [];
+        int retainedCharacters = 0;
+        for (int index = _viewModel.TerminalRecords.Count - 1; index >= 0; index--)
+        {
+            TerminalRecordItem item = _viewModel.TerminalRecords[index];
+            string text = FormatTerminalPlainTextRecord(item);
+            if (text.Length == 0)
+            {
+                continue;
+            }
+            if (retainedCharacters > 0 && retainedCharacters + text.Length > maximumCharacters)
+            {
+                break;
+            }
+            entries.Add((text, item.IsSeparator));
+            retainedCharacters += text.Length;
+        }
+        entries.Reverse();
+        ResetTerminalPlainTextDocument();
+        AppendTerminalPlainTextEntries(entries);
     }
 
     private static bool IsConnectionStatusRecord(TerminalRecordItem item) =>
@@ -672,7 +787,7 @@ public partial class MainWindow : Window
     {
         if (e.Action == NotifyCollectionChangedAction.Reset && _viewModel.TerminalRecords.Count == 0)
         {
-            TerminalPlainTextBox.Clear();
+            ResetTerminalPlainTextDocument();
         }
     }
 
@@ -696,15 +811,31 @@ public partial class MainWindow : Window
             }
         }
         else if (e.PropertyName is nameof(MainWindowViewModel.ReceiveAsHex)
-            or nameof(MainWindowViewModel.SearchText))
+            or nameof(MainWindowViewModel.SearchText)
+            or nameof(MainWindowViewModel.TerminalSeparatorEnabled)
+            or nameof(MainWindowViewModel.SelectedTerminalSeparatorStyle))
         {
-            TerminalPlainTextBox.Clear();
-            AppendTerminalPlainText(_viewModel.TerminalRecords.Count);
+            RebuildTerminalPlainText();
         }
         else if (e.PropertyName == nameof(MainWindowViewModel.TerminalFontSize))
         {
             UpdateTerminalColumnWidths();
             UpdateFrameColumnWidths();
+        }
+        else if (e.PropertyName == nameof(MainWindowViewModel.SelectedQuickCommand))
+        {
+            if (_viewModel.SelectedQuickCommand is null)
+            {
+                CollapseQuickCommandEditor();
+            }
+            else if (_quickCommandEditorExpanded)
+            {
+                _viewModel.SelectedQuickCommand.IsExpanded = true;
+            }
+            else if (_viewModel.SelectedQuickCommand.IsExpanded)
+            {
+                _viewModel.SelectedQuickCommand.IsExpanded = false;
+            }
         }
     }
 
@@ -936,8 +1067,15 @@ public partial class MainWindow : Window
             return;
         }
 
+        Button? clickedButton = FindVisualParent<Button>(originalSource);
+        if (clickedButton is { Name: "QuickCommandEditorToggleButton" })
+        {
+            _quickCommandDragSource = null;
+            return;
+        }
+
         QuickCommandsList.SelectedItem = clickedCommand;
-        if (FindVisualParent<Button>(originalSource) is not null)
+        if (clickedButton is not null)
         {
             CommitQuickCommandEditorBindings(container);
             TextBox? payloadTextBox = FindNamedTextBox(container, "QuickCommandPayloadTextBox");
@@ -986,6 +1124,134 @@ public partial class MainWindow : Window
             nameTextBox.CaretIndex = nameTextBox.Text.Length;
             nameTextBox.SelectionLength = 0;
         }, DispatcherPriority.Loaded);
+    }
+
+    private void OnToggleQuickCommandEditorClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: QuickCommandItemViewModel command })
+        {
+            return;
+        }
+
+        bool shouldCollapse = ReferenceEquals(_viewModel.SelectedQuickCommand, command)
+            && _quickCommandEditorExpanded;
+        QuickCommandsList.SelectedItem = command;
+        if (shouldCollapse)
+        {
+            CollapseQuickCommandEditor();
+        }
+        else
+        {
+            ExpandQuickCommandEditor();
+        }
+
+        e.Handled = true;
+    }
+
+    private void OnCollapseQuickCommandEditorClick(object sender, RoutedEventArgs e) =>
+        CollapseQuickCommandEditor();
+
+    private void ExpandQuickCommandEditor(bool animate = true)
+    {
+        if (_viewModel.SelectedQuickCommand is not { } selectedCommand)
+        {
+            return;
+        }
+
+        selectedCommand.IsExpanded = true;
+        _quickCommandEditorExpanded = true;
+        int generation = ++_quickCommandEditorAnimationGeneration;
+        double targetHeight = GetQuickCommandEditorTargetHeight();
+        double startHeight = QuickCommandEditorHost.Visibility == Visibility.Visible
+            ? Math.Max(0, QuickCommandEditorHost.ActualHeight)
+            : 0;
+        double startOpacity = QuickCommandEditorHost.Visibility == Visibility.Visible
+            ? QuickCommandEditorHost.Opacity
+            : 0;
+
+        QuickCommandEditorHost.BeginAnimation(FrameworkElement.HeightProperty, null);
+        QuickCommandEditorHost.BeginAnimation(UIElement.OpacityProperty, null);
+        QuickCommandEditorHost.Height = startHeight;
+        QuickCommandEditorHost.Opacity = startOpacity;
+        QuickCommandEditorHost.Visibility = Visibility.Visible;
+        if (!animate)
+        {
+            QuickCommandEditorHost.Height = targetHeight;
+            QuickCommandEditorHost.Opacity = 1;
+            return;
+        }
+
+        DoubleAnimation heightAnimation = new(startHeight, targetHeight, QuickCommandEditorTransitionDuration)
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        heightAnimation.Completed += (_, _) =>
+        {
+            if (generation != _quickCommandEditorAnimationGeneration || !_quickCommandEditorExpanded)
+            {
+                return;
+            }
+
+            QuickCommandEditorHost.BeginAnimation(FrameworkElement.HeightProperty, null);
+            QuickCommandEditorHost.Height = targetHeight;
+        };
+        QuickCommandEditorHost.BeginAnimation(FrameworkElement.HeightProperty, heightAnimation);
+        QuickCommandEditorHost.BeginAnimation(
+            UIElement.OpacityProperty,
+            new DoubleAnimation(startOpacity, 1, QuickCommandEditorTransitionDuration));
+    }
+
+    private void CollapseQuickCommandEditor()
+    {
+        if (QuickCommandEditorHost.Visibility != Visibility.Visible)
+        {
+            _quickCommandEditorExpanded = false;
+            if (_viewModel.SelectedQuickCommand is { } selectedCommand)
+            {
+                selectedCommand.IsExpanded = false;
+            }
+            return;
+        }
+
+        _quickCommandEditorExpanded = false;
+        if (_viewModel.SelectedQuickCommand is { } expandedCommand)
+        {
+            expandedCommand.IsExpanded = false;
+        }
+        int generation = ++_quickCommandEditorAnimationGeneration;
+        double startHeight = Math.Max(0, QuickCommandEditorHost.ActualHeight);
+        QuickCommandEditorHost.BeginAnimation(FrameworkElement.HeightProperty, null);
+        QuickCommandEditorHost.BeginAnimation(UIElement.OpacityProperty, null);
+        QuickCommandEditorHost.Height = startHeight;
+        DoubleAnimation heightAnimation = new(startHeight, 0, QuickCommandEditorTransitionDuration)
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
+        };
+        heightAnimation.Completed += (_, _) =>
+        {
+            if (generation != _quickCommandEditorAnimationGeneration || _quickCommandEditorExpanded)
+            {
+                return;
+            }
+
+            QuickCommandEditorHost.BeginAnimation(FrameworkElement.HeightProperty, null);
+            QuickCommandEditorHost.BeginAnimation(UIElement.OpacityProperty, null);
+            QuickCommandEditorHost.Height = 0;
+            QuickCommandEditorHost.Opacity = 0;
+            QuickCommandEditorHost.Visibility = Visibility.Collapsed;
+        };
+        QuickCommandEditorHost.BeginAnimation(FrameworkElement.HeightProperty, heightAnimation);
+        QuickCommandEditorHost.BeginAnimation(
+            UIElement.OpacityProperty,
+            new DoubleAnimation(QuickCommandEditorHost.Opacity, 0, QuickCommandEditorTransitionDuration));
+    }
+
+    private double GetQuickCommandEditorTargetHeight()
+    {
+        double panelHeight = CommandPanelBorder.ActualHeight;
+        return panelHeight > 0 && double.IsFinite(panelHeight)
+            ? Math.Clamp(panelHeight * 0.44, 230, 350)
+            : 300;
     }
 
     private static TextBox? FindNamedTextBox(DependencyObject parent, string name)
@@ -1337,7 +1603,7 @@ public partial class MainWindow : Window
         {
             QuickCommandsList.SelectedItem = source;
         }
-        ShowQuickCommandDropIndicator(insertionIndex.Value);
+        ShowQuickCommandDropIndicator(insertionIndex.Value, source.IsPinned);
         e.Effects = DragDropEffects.Move;
         e.Handled = true;
     }
@@ -1365,6 +1631,16 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (source.IsPinned)
+        {
+            ReorderPinnedQuickCommand(source, insertionIndex.Value);
+            SelectQuickCommand(source, forceRefresh: true);
+            ClearQuickCommandDropIndicators();
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+            return;
+        }
+
         int sourceIndex = _viewModel.QuickCommands.IndexOf(source);
         int insertIndex = insertionIndex.Value;
         if (sourceIndex < insertIndex)
@@ -1386,12 +1662,16 @@ public partial class MainWindow : Window
 
     private int? GetQuickCommandInsertionIndex(DragEventArgs e)
     {
+        QuickCommandItemViewModel? source = e.Data.GetData(typeof(QuickCommandItemViewModel)) as QuickCommandItemViewModel;
+        List<QuickCommandItemViewModel> orderedCommands = source?.IsPinned == true
+            ? GetQuickCommandViewItems()
+            : _viewModel.QuickCommands.ToList();
         ListBoxItem? container = ItemsControl.ContainerFromElement(
             QuickCommandsList,
             e.OriginalSource as DependencyObject) as ListBoxItem;
         if (container?.DataContext is QuickCommandItemViewModel target)
         {
-            int targetIndex = _viewModel.QuickCommands.IndexOf(target);
+            int targetIndex = orderedCommands.IndexOf(target);
             if (targetIndex < 0)
             {
                 return null;
@@ -1443,7 +1723,7 @@ public partial class MainWindow : Window
             double firstTop = firstContainer.TranslatePoint(new Point(0, 0), QuickCommandsList).Y;
             if (listPosition.Y < firstTop)
             {
-                return _viewModel.QuickCommands.IndexOf(firstCommand);
+                return orderedCommands.IndexOf(firstCommand);
             }
         }
 
@@ -1454,14 +1734,14 @@ public partial class MainWindow : Window
                 QuickCommandsList).Y;
             if (listPosition.Y > lastBottom)
             {
-                return _viewModel.QuickCommands.IndexOf(lastCommand) + 1;
+                return orderedCommands.IndexOf(lastCommand) + 1;
             }
         }
 
-        return _quickCommandDropInsertionIndex ?? _viewModel.QuickCommands.Count;
+        return _quickCommandDropInsertionIndex ?? orderedCommands.Count;
     }
 
-    private void ShowQuickCommandDropIndicator(int insertionIndex)
+    private void ShowQuickCommandDropIndicator(int insertionIndex, bool useViewOrder)
     {
         if (_quickCommandDropInsertionIndex == insertionIndex)
         {
@@ -1470,19 +1750,52 @@ public partial class MainWindow : Window
 
         ClearQuickCommandDropIndicators();
         _quickCommandDropInsertionIndex = insertionIndex;
-        if (_viewModel.QuickCommands.Count == 0)
+        List<QuickCommandItemViewModel> orderedCommands = useViewOrder
+            ? GetQuickCommandViewItems()
+            : _viewModel.QuickCommands.ToList();
+        if (orderedCommands.Count == 0)
         {
             return;
         }
 
-        if (insertionIndex >= _viewModel.QuickCommands.Count)
+        if (insertionIndex >= orderedCommands.Count)
         {
-            _viewModel.QuickCommands[^1].IsDropTargetAfter = true;
+            orderedCommands[^1].IsDropTargetAfter = true;
         }
         else
         {
-            _viewModel.QuickCommands[Math.Max(0, insertionIndex)].IsDropTarget = true;
+            orderedCommands[Math.Max(0, insertionIndex)].IsDropTarget = true;
         }
+    }
+
+    private List<QuickCommandItemViewModel> GetQuickCommandViewItems() =>
+        _viewModel.QuickCommandsView.Cast<QuickCommandItemViewModel>().ToList();
+
+    private void ReorderPinnedQuickCommand(QuickCommandItemViewModel source, int insertionIndex)
+    {
+        List<QuickCommandItemViewModel> pinnedCommands = GetQuickCommandViewItems()
+            .Where(command => command.IsPinned)
+            .ToList();
+        int sourceIndex = pinnedCommands.IndexOf(source);
+        if (sourceIndex < 0)
+        {
+            return;
+        }
+
+        int targetIndex = Math.Clamp(insertionIndex, 0, pinnedCommands.Count);
+        if (sourceIndex < targetIndex)
+        {
+            targetIndex--;
+        }
+
+        if (sourceIndex == targetIndex)
+        {
+            return;
+        }
+
+        pinnedCommands.RemoveAt(sourceIndex);
+        pinnedCommands.Insert(targetIndex, source);
+        _viewModel.ReorderPinnedQuickCommands(pinnedCommands);
     }
 
     private static Button? GetQuickCommandDragHandle(DependencyObject? element)
@@ -1525,7 +1838,9 @@ public partial class MainWindow : Window
     {
         IEnumerable<TerminalRecordItem> rows = TerminalList.SelectedItems.Cast<TerminalRecordItem>();
         string text = string.Join(Environment.NewLine, rows.Select(item =>
-            $"{item.TimeText}\t{item.DirectionText}\t{item.Endpoint}\t{item.Size}\t{item.GetDisplayContent(_viewModel.ReceiveAsHex)}"));
+            item.IsSeparator
+                ? _viewModel.BuildTerminalSeparatorLine(item.SeparatorGapMilliseconds)
+                : $"{item.TimeText}\t{item.DirectionText}\t{item.Endpoint}\t{item.Size}\t{item.GetDisplayContent(_viewModel.ReceiveAsHex)}"));
         if (!string.IsNullOrEmpty(text))
         {
             Clipboard.SetText(text);
@@ -1787,7 +2102,10 @@ public partial class MainWindow : Window
         };
         if (dialog.ShowDialog(this) == true)
         {
-            await File.WriteAllTextAsync(dialog.FileName, TerminalPlainTextBox.Text, new UTF8Encoding(false));
+            string text = new TextRange(
+                TerminalPlainTextBox.Document.ContentStart,
+                TerminalPlainTextBox.Document.ContentEnd).Text;
+            await File.WriteAllTextAsync(dialog.FileName, text, new UTF8Encoding(false));
             _viewModel.StatusText = $"连续文本已保存：{dialog.FileName}";
         }
     }
@@ -1896,11 +2214,15 @@ public partial class MainWindow : Window
 
     private void OnToggleThemeClick(object sender, RoutedEventArgs e)
     {
+        if (_themeTransitionActive)
+        {
+            return;
+        }
+
         ApplicationTheme next = ApplicationThemeManager.GetAppTheme() == ApplicationTheme.Dark
             ? ApplicationTheme.Light
             : ApplicationTheme.Dark;
-        App.ApplyTheme(next);
-        _viewModel.ApplyTerminalThemeColors(next);
+        StartThemeTransition(next);
     }
 
     private async void OnAddWindowClick(object sender, RoutedEventArgs e)
@@ -2004,6 +2326,10 @@ public partial class MainWindow : Window
 
         CloseOpenComboBox();
         EnforcePanelLayout();
+        if (_quickCommandEditorExpanded && QuickCommandEditorHost is not null)
+        {
+            ExpandQuickCommandEditor(animate: false);
+        }
         UpdateFrameColumnWidths();
     }
 
@@ -2119,13 +2445,10 @@ public partial class MainWindow : Window
             DevicePanelColumn.MinWidth = DevicePanelMinWidth;
             DevicePanelColumn.Width = new GridLength(width);
             DeviceSplitterColumn.Width = new GridLength(SplitterWidth);
+            return;
         }
-        else
-        {
-            DevicePanelColumn.MinWidth = 0;
-            DevicePanelColumn.Width = new GridLength(0);
-            DeviceSplitterColumn.Width = new GridLength(0);
-        }
+
+        CollapseDevicePanel();
     }
 
     private void ApplyCommandPanel(double width)
@@ -2135,12 +2458,97 @@ public partial class MainWindow : Window
             CommandPanelColumn.MinWidth = CommandPanelMinWidth;
             CommandPanelColumn.Width = new GridLength(width);
             CommandSplitterColumn.Width = new GridLength(SplitterWidth);
+            return;
         }
-        else
+
+        CollapseCommandPanel();
+    }
+
+    private void CollapseDevicePanel()
+    {
+        DevicePanelColumn.MinWidth = 0;
+        DevicePanelColumn.Width = new GridLength(0);
+        DeviceSplitterColumn.Width = new GridLength(0);
+    }
+
+    private void CollapseCommandPanel()
+    {
+        CommandPanelColumn.MinWidth = 0;
+        CommandPanelColumn.Width = new GridLength(0);
+        CommandSplitterColumn.Width = new GridLength(0);
+    }
+
+    private void StartThemeTransition(ApplicationTheme next)
+    {
+        double width = WindowLayoutRoot.ActualWidth;
+        if (!IsLoaded || width <= 1)
         {
-            CommandPanelColumn.MinWidth = 0;
-            CommandPanelColumn.Width = new GridLength(0);
-            CommandSplitterColumn.Width = new GridLength(0);
+            App.ApplyTheme(next);
+            _viewModel.ApplyTerminalThemeColors(next);
+            return;
+        }
+
+        _themeTransitionActive = true;
+        ThemeTransitionOverlay.Visibility = Visibility.Visible;
+        ThemeTransitionOverlay.IsHitTestVisible = true;
+        ThemeTransitionOverlay.BeginAnimation(UIElement.OpacityProperty, null);
+        ThemeTransitionOverlay.Opacity = 1;
+        ResetThemeWipes();
+
+        if (next == ApplicationTheme.Dark)
+        {
+            BeginThemeWipe(DarkThemeWipe, width, () => CompleteThemeTransition(next));
+            return;
+        }
+
+        BeginThemeWipe(LightThemeLeftWipe, width / 2, null);
+        BeginThemeWipe(LightThemeRightWipe, width / 2, () => CompleteThemeTransition(next));
+    }
+
+    private static void BeginThemeWipe(FrameworkElement wipe, double width, Action? onCompleted)
+    {
+        DoubleAnimation animation = new(0, width, ThemeWipeDuration)
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut }
+        };
+        if (onCompleted is not null)
+        {
+            animation.Completed += (_, _) => onCompleted();
+        }
+        wipe.BeginAnimation(FrameworkElement.WidthProperty, animation);
+    }
+
+    private void CompleteThemeTransition(ApplicationTheme next)
+    {
+        App.ApplyTheme(next);
+        _viewModel.ApplyTerminalThemeColors(next);
+        DoubleAnimation reveal = new(1, 0, ThemeRevealDuration)
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        reveal.Completed += (_, _) =>
+        {
+            ThemeTransitionOverlay.BeginAnimation(UIElement.OpacityProperty, null);
+            ThemeTransitionOverlay.Opacity = 1;
+            ThemeTransitionOverlay.Visibility = Visibility.Collapsed;
+            ThemeTransitionOverlay.IsHitTestVisible = false;
+            ResetThemeWipes();
+            _themeTransitionActive = false;
+        };
+        ThemeTransitionOverlay.BeginAnimation(UIElement.OpacityProperty, reveal);
+    }
+
+    private void ResetThemeWipes()
+    {
+        foreach (FrameworkElement wipe in new FrameworkElement[]
+        {
+            DarkThemeWipe,
+            LightThemeLeftWipe,
+            LightThemeRightWipe
+        })
+        {
+            wipe.BeginAnimation(FrameworkElement.WidthProperty, null);
+            wipe.Width = 0;
         }
     }
 

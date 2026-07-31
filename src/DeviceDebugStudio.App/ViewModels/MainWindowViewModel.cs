@@ -29,6 +29,11 @@ namespace DeviceDebugStudio.App.ViewModels;
 
 public sealed record TransportOption(TransportKind Kind, string Name);
 public sealed record WorkspaceModeOption(WorkspaceMode Mode, string Name);
+public sealed record QuickCommandCategoryOption(QuickCommandCategory Category, string Name);
+public sealed record TerminalSeparatorStyleOption(string Character, string Name)
+{
+    public string DisplayText => $"{Character}  {Name}";
+}
 public sealed record FramingModeOption(FramingMode Mode, string Name, string Description);
 
 public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
@@ -47,10 +52,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly BleGattBrowserService _bleGattBrowser;
     private readonly ConcurrentQueue<TransportPacket> _pendingTerminal = new();
     private readonly List<TransportPacket> _serialTerminalBuffer = [];
+    private readonly TerminalWaveSeparatorTracker _terminalWaveSeparatorTracker = new();
     private readonly ConcurrentQueue<FrameRecordItem> _pendingFrames = new();
     private readonly ConcurrentQueue<double> _pendingChartValues = new();
     private readonly object _transportDiagnosticLogLock = new();
     private readonly Dictionary<Guid, CancellationTokenSource> _repeatCommands = [];
+    private readonly Dictionary<QuickCommandCategory, List<QuickCommandItemViewModel>> _quickCommandsByCategory = [];
     private CancellationTokenSource? _sendRepeatCancellation;
     private readonly object _decoderSync = new();
     private readonly object _frameCodecSync = new();
@@ -81,6 +88,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private long _lastDisplayDropCount;
     private bool _manualDisconnect;
     private bool _connectionDesired;
+    private bool _connectionRetryPending;
     private CancellationTokenSource? _connectionAttemptCancellation;
     private Decoder? _receiveDecoder;
     private string _decoderEncodingName = string.Empty;
@@ -88,6 +96,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private bool _idleGapFlushed = true;
     private bool _suppressProfileSelection;
     private bool _replacingQuickCommands;
+    private bool _switchingQuickCommandCategory;
+    private QuickCommandCategory _quickCommandCategoryBeforeSelectionChange;
     private bool _suppressSendModeConversion;
     private bool _loadingTerminalDisplaySettings;
     private DeviceProfile? _activeProfile;
@@ -120,8 +130,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         selectedTransportOption = TransportOptions[0];
         selectedWorkspaceMode = WorkspaceModes[0];
+        selectedQuickCommandCategory = QuickCommandCategories[0];
         selectedQuickCommandSort = QuickCommandSortOptions[0];
         selectedQuickCommandDataFormat = QuickCommandDataFormats[0];
+        selectedTerminalSeparatorStyle = TerminalSeparatorStyles[0];
         selectedEncodingName = "UTF-8";
         selectedLineEnding = "CRLF";
         selectedSendChecksum = ChecksumKind.None;
@@ -210,9 +222,25 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         new(WorkspaceMode.Modbus, "Modbus")
     ];
 
+    public IReadOnlyList<QuickCommandCategoryOption> QuickCommandCategories { get; } =
+    [
+        new(QuickCommandCategory.Serial, "串口"),
+        new(QuickCommandCategory.Tcp, "TCP / UDP"),
+        new(QuickCommandCategory.Bluetooth, "蓝牙"),
+        new(QuickCommandCategory.Modbus, "Modbus"),
+        new(QuickCommandCategory.Sscom, "SSCOM")
+    ];
+
     public ObservableCollection<TransportOption> AvailableTransportOptions { get; } = [];
     public IReadOnlyList<string> QuickCommandSortOptions { get; } = ["使用频率", "最近使用", "手动顺序"];
     public IReadOnlyList<string> QuickCommandDataFormats { get; } = ["按指令", "ASCII", "UTF-8", "GBK", "HEX"];
+    public IReadOnlyList<TerminalSeparatorStyleOption> TerminalSeparatorStyles { get; } =
+    [
+        new("-", "短横线"),
+        new("*", "星号"),
+        new("/", "斜线"),
+        new("#", "井号")
+    ];
 
     public IReadOnlyList<int> BaudRates { get; } = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600, 1000000, 2000000];
     public IReadOnlyList<string> EncodingNames { get; } = ["ASCII", "UTF-8", "GBK"];
@@ -431,10 +459,25 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private string terminalBackgroundColor = App.DefaultTerminalBackgroundColor;
 
     [ObservableProperty]
+    private bool terminalSeparatorEnabled;
+
+    [ObservableProperty]
+    private double terminalSeparatorIntervalMs = AppSettings.DefaultTerminalSeparatorIntervalMs;
+
+    [ObservableProperty]
+    private TerminalSeparatorStyleOption selectedTerminalSeparatorStyle;
+
+    [ObservableProperty]
+    private string terminalSeparatorColor = App.DefaultTerminalSeparatorColor;
+
+    [ObservableProperty]
     private string searchText = string.Empty;
 
     [ObservableProperty]
     private string quickCommandSearchText = string.Empty;
+
+    [ObservableProperty]
+    private QuickCommandCategoryOption selectedQuickCommandCategory;
 
     [ObservableProperty]
     private string selectedQuickCommandSort;
@@ -497,14 +540,25 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private bool modbusSlaveEnabled;
 
     public string ConnectionButtonText => SelectedTransportKind == TransportKind.TcpServer
-        ? _connectionDesired ? "停止监听" : "开始监听"
-        : _connectionDesired ? "断开" : "连接";
+        ? IsConnected ? "停止监听" : _connectionDesired ? "正在监听…" : "开始监听"
+        : IsConnected ? "断开" : _connectionDesired ? "正在连接…" : "连接";
     public string AutoReconnectText => SelectedTransportKind == TransportKind.TcpServer
         ? "自动恢复监听"
         : "自动重连";
     public string DiagnosticsDirectory => AppPaths.DiagnosticsDirectory;
     public string UpdateDiagnosticsDirectory => AppPaths.UpdateDiagnosticsDirectory;
     public string CaptureDirectory => AppPaths.CaptureDirectory;
+    public string TerminalSeparatorFillText => new(TerminalSeparatorCharacter, 160);
+    public string TerminalSeparatorPreviewText => BuildTerminalSeparatorLine(TerminalSeparatorIntervalMs, 10);
+    private char TerminalSeparatorCharacter => string.IsNullOrEmpty(SelectedTerminalSeparatorStyle?.Character)
+        ? AppSettings.DefaultTerminalSeparatorStyle[0]
+        : SelectedTerminalSeparatorStyle.Character[0];
+
+    public string BuildTerminalSeparatorLine(double gapMilliseconds, int fillLength = 28)
+    {
+        string fill = new(TerminalSeparatorCharacter, Math.Clamp(fillLength, 1, 80));
+        return $"{fill}  {TerminalRecordItem.FormatSeparatorGap(gapMilliseconds)}  {fill}";
+    }
     public string SelectedFramingModeDescription => FramingModes
         .FirstOrDefault(option => option.Mode == SelectedFramingMode)?.Description
         ?? "请选择一种分帧方式。";
@@ -795,10 +849,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             CaptureOpenResult result = await _captureFileReader.ReadAsync(path).ConfigureAwait(true);
             TerminalRecords.Clear();
+            _terminalWaveSeparatorTracker.Reset();
             List<TerminalRecordItem> batch = new(1000);
             foreach (TransportPacket packet in result.Packets)
             {
-                batch.Add(FormatPacket(packet));
+                AppendFormattedPacket(batch, packet);
                 if (batch.Count >= 1000)
                 {
                     TerminalRecords.AddRange(batch);
@@ -875,8 +930,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         StatusText = $"文件发送完成：{sent} 字节";
     }
 
-    public string ExportTerminalText() => string.Join(Environment.NewLine, TerminalRecords.Select(item =>
-        $"{item.Timestamp:O}\t{item.DirectionText}\t{item.Endpoint}\t{item.GetDisplayContent(ReceiveAsHex)}"));
+    public string ExportTerminalText() => string.Join(
+        Environment.NewLine,
+        TerminalRecords
+            .Where(item => !item.IsSeparator || TerminalSeparatorEnabled)
+            .Select(item => item.IsSeparator
+                ? BuildTerminalSeparatorLine(item.SeparatorGapMilliseconds)
+                : $"{item.Timestamp:O}\t{item.DirectionText}\t{item.Endpoint}\t{item.GetDisplayContent(ReceiveAsHex)}"));
 
     public string ExportTerminalTableCsv()
     {
@@ -884,6 +944,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         builder.AppendLine("时间,方向,端点,字节,内容");
         foreach (TerminalRecordItem item in TerminalRecords)
         {
+            if (item.IsSeparator)
+            {
+                if (TerminalSeparatorEnabled)
+                {
+                    builder.Append(",,,,");
+                    AppendCsvField(builder, BuildTerminalSeparatorLine(item.SeparatorGapMilliseconds));
+                    builder.AppendLine();
+                }
+                continue;
+            }
+
             AppendCsvField(builder, item.TimeText);
             builder.Append(',');
             AppendCsvField(builder, item.DirectionText);
@@ -1404,6 +1475,48 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    [RelayCommand]
+    private void ToggleQuickCommandPin(QuickCommandItemViewModel? command)
+    {
+        if (command is null || !QuickCommands.Contains(command))
+        {
+            return;
+        }
+
+        if (command.IsPinned)
+        {
+            command.IsPinned = false;
+            command.PinnedOrder = 0;
+        }
+        else
+        {
+            int firstPinnedOrder = QuickCommands
+                .Where(item => item.IsPinned)
+                .Select(item => item.PinnedOrder)
+                .DefaultIfEmpty(0)
+                .Min();
+            command.IsPinned = true;
+            command.PinnedOrder = firstPinnedOrder - 1;
+        }
+
+        ApplyQuickCommandSort();
+        QuickCommandsView.Refresh();
+        ScheduleProfileSave();
+    }
+
+    public void ReorderPinnedQuickCommands(IReadOnlyList<QuickCommandItemViewModel> orderedCommands)
+    {
+        int order = 0;
+        foreach (QuickCommandItemViewModel command in orderedCommands.Where(item => item.IsPinned))
+        {
+            command.PinnedOrder = order++;
+        }
+
+        ApplyQuickCommandSort();
+        QuickCommandsView.Refresh();
+        ScheduleProfileSave();
+    }
+
     private bool CanDeleteSelectedQuickCommands() => QuickCommands.Any(command => command.IsSelectedForBulkDelete);
 
     [RelayCommand(CanExecute = nameof(CanDeleteSelectedQuickCommands))]
@@ -1516,6 +1629,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         _pendingTerminal.Clear();
         _serialTerminalBuffer.Clear();
+        _terminalWaveSeparatorTracker.Reset();
         TerminalRecords.Clear();
         FrameRecords.Clear();
         StatusText = "已清空显示，捕获文件未删除";
@@ -1694,6 +1808,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             _pendingTerminal.Clear();
             _serialTerminalBuffer.Clear();
+            _terminalWaveSeparatorTracker.Reset();
             TerminalRecords.Clear();
             FrameRecords.Clear();
             DeviceProfile? snapshot = CreateActiveProfileSnapshot();
@@ -1778,6 +1893,52 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (!value.Equals(normalized))
         {
             TerminalFontSize = normalized;
+            return;
+        }
+
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
+    partial void OnTerminalSeparatorEnabledChanged(bool value)
+    {
+        if (_loadingTerminalDisplaySettings)
+        {
+            return;
+        }
+
+        _terminalWaveSeparatorTracker.Reset();
+        RefreshTerminalRecordsView();
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
+    partial void OnTerminalSeparatorIntervalMsChanged(double value)
+    {
+        double normalized = Math.Clamp(Math.Round(value), 1, 600_000);
+        if (!value.Equals(normalized))
+        {
+            TerminalSeparatorIntervalMs = normalized;
+            return;
+        }
+
+        OnPropertyChanged(nameof(TerminalSeparatorPreviewText));
+        if (_loadingTerminalDisplaySettings)
+        {
+            return;
+        }
+
+        _terminalWaveSeparatorTracker.Reset();
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
+
+    partial void OnSelectedTerminalSeparatorStyleChanged(TerminalSeparatorStyleOption value)
+    {
+        OnPropertyChanged(nameof(TerminalSeparatorFillText));
+        OnPropertyChanged(nameof(TerminalSeparatorPreviewText));
+        if (_loadingTerminalDisplaySettings)
+        {
             return;
         }
 
@@ -1871,6 +2032,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 AppSettings.DefaultFrameSummaryColumnWidth);
             TerminalTextColor = App.NormalizeTerminalColor(settings.TerminalTextColor, App.DefaultTerminalTextColor);
             TerminalBackgroundColor = App.NormalizeTerminalColor(settings.TerminalBackgroundColor, App.DefaultTerminalBackgroundColor);
+            TerminalSeparatorEnabled = settings.TerminalSeparatorEnabled;
+            TerminalSeparatorIntervalMs = Math.Clamp(settings.TerminalSeparatorIntervalMs, 1, 600_000);
+            SelectedTerminalSeparatorStyle = TerminalSeparatorStyles.FirstOrDefault(option =>
+                string.Equals(option.Character, settings.TerminalSeparatorStyle, StringComparison.Ordinal))
+                ?? TerminalSeparatorStyles[0];
+            TerminalSeparatorColor = App.NormalizeTerminalColor(settings.TerminalSeparatorColor, App.DefaultTerminalSeparatorColor);
             LoadTerminalPalette(TerminalTextPalette, settings.TerminalTextPalette, App.DefaultTerminalTextPalette);
             LoadTerminalPalette(TerminalBackgroundPalette, settings.TerminalBackgroundPalette, App.DefaultTerminalBackgroundPalette);
         }
@@ -1883,11 +2050,29 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     public void ApplyTerminalThemeColors(ApplicationTheme theme) =>
-        App.ApplyTerminalColorsForTheme(theme, TerminalTextColor, TerminalBackgroundColor);
+        App.ApplyTerminalColorsForTheme(theme, TerminalTextColor, TerminalBackgroundColor, TerminalSeparatorColor);
 
     partial void OnTerminalTextColorChanged(string value) => ApplyTerminalColorChange(value, true);
 
     partial void OnTerminalBackgroundColorChanged(string value) => ApplyTerminalColorChange(value, false);
+
+    partial void OnTerminalSeparatorColorChanged(string value)
+    {
+        if (_loadingTerminalDisplaySettings || !App.TryNormalizeTerminalColor(value, out string normalized))
+        {
+            return;
+        }
+
+        if (!string.Equals(value, normalized, StringComparison.Ordinal))
+        {
+            TerminalSeparatorColor = normalized;
+            return;
+        }
+
+        App.ApplyTerminalSeparatorColor(normalized);
+        _appSettingsSaveTimer.Stop();
+        _appSettingsSaveTimer.Start();
+    }
 
     private void ApplyTerminalColorChange(string value, bool isTextColor)
     {
@@ -1914,7 +2099,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        App.ApplyTerminalColors(TerminalTextColor, TerminalBackgroundColor);
+        App.ApplyTerminalColors(TerminalTextColor, TerminalBackgroundColor, TerminalSeparatorColor);
         _appSettingsSaveTimer.Stop();
         _appSettingsSaveTimer.Start();
     }
@@ -1945,6 +2130,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         TerminalFontSize = 12;
         TerminalTextColor = App.DefaultTerminalTextColor;
         TerminalBackgroundColor = App.DefaultTerminalBackgroundColor;
+        TerminalSeparatorEnabled = false;
+        TerminalSeparatorIntervalMs = AppSettings.DefaultTerminalSeparatorIntervalMs;
+        SelectedTerminalSeparatorStyle = TerminalSeparatorStyles[0];
+        TerminalSeparatorColor = App.DefaultTerminalSeparatorColor;
         LoadTerminalPalette(TerminalTextPalette, App.DefaultTerminalTextPalette, App.DefaultTerminalTextPalette);
         LoadTerminalPalette(TerminalBackgroundPalette, App.DefaultTerminalBackgroundPalette, App.DefaultTerminalBackgroundPalette);
         _appSettingsSaveTimer.Stop();
@@ -1988,6 +2177,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         StopSendRepeat();
         _pendingTerminal.Clear();
         _serialTerminalBuffer.Clear();
+        _terminalWaveSeparatorTracker.Reset();
         TerminalRecords.Clear();
         FrameRecords.Clear();
         if (_connectedWorkspaceMode is not null && _connectedWorkspaceMode != value.Mode)
@@ -2006,6 +2196,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             WorkspaceMode.Bluetooth => 4,
             _ => 0
         };
+        SelectQuickCommandCategoryForWorkspace(value.Mode);
         OnPropertyChanged(nameof(IsSerialWorkspace));
         OnPropertyChanged(nameof(IsNetworkWorkspace));
         OnPropertyChanged(nameof(IsBluetoothWorkspace));
@@ -2026,6 +2217,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         _pendingTerminal.Clear();
         _serialTerminalBuffer.Clear();
+        _terminalWaveSeparatorTracker.Reset();
         TerminalRecords.Clear();
         FrameRecords.Clear();
         OnPropertyChanged(nameof(ConnectionButtonText));
@@ -2119,6 +2311,22 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnQuickCommandSearchTextChanged(string value) => QuickCommandsView.Refresh();
 
+    partial void OnSelectedQuickCommandCategoryChanging(QuickCommandCategoryOption value)
+    {
+        if (!_switchingQuickCommandCategory)
+        {
+            _quickCommandCategoryBeforeSelectionChange = selectedQuickCommandCategory.Category;
+        }
+    }
+
+    partial void OnSelectedQuickCommandCategoryChanged(QuickCommandCategoryOption value)
+    {
+        if (!_switchingQuickCommandCategory)
+        {
+            SwitchQuickCommandCategory(_quickCommandCategoryBeforeSelectionChange, value.Category);
+        }
+    }
+
     partial void OnSelectedQuickCommandSortChanged(string value)
     {
         ApplyQuickCommandSort();
@@ -2151,7 +2359,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     partial void OnDtrEnableChanged(bool value) => OnConnectionConfigurationChanged();
     partial void OnRtsEnableChanged(bool value) => OnConnectionConfigurationChanged();
     partial void OnReceiveTimeoutMsChanged(int value) => ScheduleProfileSave();
-    partial void OnAutoReconnectChanged(bool value) => ScheduleProfileSave();
+    partial void OnAutoReconnectChanged(bool value)
+    {
+        ScheduleProfileSave();
+        if (!value && _connectionRetryPending)
+        {
+            _connectionRetryPending = false;
+            _connectionDesired = false;
+            _manualDisconnect = true;
+            _connectionAttemptCancellation?.Cancel();
+            OnPropertyChanged(nameof(ConnectionButtonText));
+        }
+    }
     partial void OnSendRepeatEnabledChanged(bool value) => UpdateSendRepeatState();
     partial void OnSelectedLineEndingChanged(string value)
     {
@@ -2242,7 +2461,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     public bool IsTerminalRecordVisible(TerminalRecordItem item) =>
-        item.MatchesSearch(SearchText, ReceiveAsHex);
+        (!item.IsSeparator || TerminalSeparatorEnabled)
+        && item.MatchesSearch(SearchText, ReceiveAsHex);
 
     partial void OnSearchTextChanged(string value) => RefreshTerminalRecordsView();
 
@@ -2454,6 +2674,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         consume?.Dispose();
         _pendingTerminal.Clear();
         _serialTerminalBuffer.Clear();
+        _terminalWaveSeparatorTracker.Reset();
         _connectedWorkspaceMode = null;
         IsConnected = false;
         StatusText = statusText;
@@ -2687,15 +2908,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         else
         {
+            _connectionRetryPending = true;
             StatusText = faultedKind == TransportKind.TcpServer
                 ? "监听中断，2 秒后重新监听…"
                 : "连接中断，2 秒后重连…";
             await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(true);
+            _connectionRetryPending = false;
         }
 
         await Task.Yield();
         await DisconnectInternalAsync().ConfigureAwait(true);
-        if (shouldReconnect && _connectionDesired && !_manualDisconnect)
+        if (shouldReconnect && _connectionDesired && !_manualDisconnect && AutoReconnect)
         {
             EnsureConnectionStateWorker();
         }
@@ -2709,10 +2932,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             pendingPackets.Add(packet);
         }
 
+        double receiveGapMilliseconds = Math.Clamp(ReceiveTimeoutMs, 1, 5000);
+        if (TerminalSeparatorEnabled)
+        {
+            receiveGapMilliseconds = Math.Min(receiveGapMilliseconds, TerminalSeparatorIntervalMs);
+        }
+        TimeSpan receiveGap = TimeSpan.FromMilliseconds(receiveGapMilliseconds);
         IReadOnlyList<TransportPacket> displayPackets;
         if (SelectedTransportKind == TransportKind.Serial)
         {
-            TimeSpan receiveGap = TimeSpan.FromMilliseconds(Math.Clamp(ReceiveTimeoutMs, 1, 5000));
             _serialTerminalBuffer.AddRange(pendingPackets);
             int readyCount = TransportPacketCoalescer.GetReadyPrefixCount(
                 _serialTerminalBuffer,
@@ -2734,15 +2962,20 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 _serialTerminalBuffer.AddRange(pendingPackets);
                 displayPackets = TransportPacketCoalescer.CoalesceAdjacentReceives(
                     _serialTerminalBuffer,
-                    TimeSpan.FromMilliseconds(Math.Clamp(ReceiveTimeoutMs, 1, 5000)));
+                    receiveGap);
                 _serialTerminalBuffer.Clear();
             }
         }
-        if (displayPackets.Count > 0)
+        List<TerminalRecordItem> displayRecords = new(displayPackets.Count * 2);
+        foreach (TransportPacket packet in displayPackets)
         {
-            TerminalRecords.AddRange(displayPackets.Select(FormatPacket));
+            AppendFormattedPacket(displayRecords, packet);
         }
-        int added = displayPackets.Count;
+        if (displayRecords.Count > 0)
+        {
+            TerminalRecords.AddRange(displayRecords);
+        }
+        int added = displayRecords.Count;
         int limit = SelectedProfile?.Terminal.UiRecordLimit ?? 100_000;
         TerminalRecords.RemoveFirst(TerminalRecords.Count - limit);
 
@@ -2900,6 +3133,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         QuickCommandsView.Refresh();
         DeleteSelectedQuickCommandsCommand.NotifyCanExecuteChanged();
+        StoreCurrentQuickCommands();
         ScheduleProfileSave();
     }
 
@@ -2918,6 +3152,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                     }
                 }
             }
+            return;
+        }
+        if (args.PropertyName is nameof(QuickCommandItemViewModel.IsPinned)
+            or nameof(QuickCommandItemViewModel.PinnedOrder))
+        {
+            ApplyQuickCommandSort();
+            QuickCommandsView.Refresh();
+            ScheduleProfileSave();
             return;
         }
         if (args.PropertyName == nameof(QuickCommandItemViewModel.IsSelectedForBulkDelete))
@@ -2976,6 +3218,122 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         RefreshSendCommandAvailability();
     }
 
+    private void SelectQuickCommandCategoryForWorkspace(WorkspaceMode workspaceMode)
+    {
+        QuickCommandCategory category = GetQuickCommandCategoryForWorkspace(workspaceMode);
+        QuickCommandCategoryOption option = QuickCommandCategories.First(item => item.Category == category);
+        if (SelectedQuickCommandCategory.Category != category)
+        {
+            SelectedQuickCommandCategory = option;
+        }
+    }
+
+    private static QuickCommandCategory GetQuickCommandCategoryForWorkspace(WorkspaceMode workspaceMode) => workspaceMode switch
+    {
+        WorkspaceMode.Network => QuickCommandCategory.Tcp,
+        WorkspaceMode.Bluetooth => QuickCommandCategory.Bluetooth,
+        WorkspaceMode.Modbus => QuickCommandCategory.Modbus,
+        _ => QuickCommandCategory.Serial
+    };
+
+    private void SwitchQuickCommandCategory(QuickCommandCategory previousCategory, QuickCommandCategory category)
+    {
+        if (_switchingQuickCommandCategory)
+        {
+            return;
+        }
+
+        _switchingQuickCommandCategory = true;
+        try
+        {
+            StoreQuickCommands(previousCategory);
+            ReplaceQuickCommands(GetQuickCommandCategoryItems(category));
+        }
+        finally
+        {
+            _switchingQuickCommandCategory = false;
+        }
+    }
+
+    private List<QuickCommandItemViewModel> GetQuickCommandCategoryItems(QuickCommandCategory category)
+    {
+        if (!_quickCommandsByCategory.TryGetValue(category, out List<QuickCommandItemViewModel>? commands))
+        {
+            commands = [];
+            _quickCommandsByCategory[category] = commands;
+        }
+        return commands;
+    }
+
+    private void StoreCurrentQuickCommands()
+    {
+        StoreQuickCommands(SelectedQuickCommandCategory.Category);
+    }
+
+    private void StoreQuickCommands(QuickCommandCategory category) =>
+        _quickCommandsByCategory[category] = QuickCommands.ToList();
+
+    private List<QuickCommandGroup> CreateQuickCommandGroups()
+    {
+        StoreCurrentQuickCommands();
+        return QuickCommandCategories
+            .Select(option => new QuickCommandGroup
+            {
+                Name = $"{option.Name}指令",
+                Category = option.Category,
+                Commands = GetQuickCommandCategoryItems(option.Category)
+                    .Select(item => item.ToModel())
+                    .ToList()
+            })
+            .Where(group => group.Commands.Count > 0)
+            .ToList();
+    }
+
+    private static QuickCommandCategory ResolveQuickCommandCategory(
+        DeviceProfile profile,
+        QuickCommandGroup group)
+    {
+        if (group.Category != QuickCommandCategory.Serial)
+        {
+            return group.Category;
+        }
+
+        return IsSscomImportedProfile(profile)
+            && group.Name.Contains("SSCOM", StringComparison.OrdinalIgnoreCase)
+            ? QuickCommandCategory.Sscom
+            : QuickCommandCategory.Serial;
+    }
+
+    private bool RemoveDuplicateSscomImportedCommandCopies(DeviceProfile profile)
+    {
+        if (!IsSscomImportedProfile(profile))
+        {
+            return false;
+        }
+
+        List<QuickCommandItemViewModel> sscomCommands = GetQuickCommandCategoryItems(QuickCommandCategory.Sscom);
+        if (sscomCommands.Count == 0)
+        {
+            return false;
+        }
+
+        bool removed = false;
+        foreach (QuickCommandCategoryOption option in QuickCommandCategories.Where(item => item.Category != QuickCommandCategory.Sscom))
+        {
+            List<QuickCommandItemViewModel> commands = GetQuickCommandCategoryItems(option.Category);
+            if (commands.Count == sscomCommands.Count
+                && commands.Select(item => item.Id).SequenceEqual(sscomCommands.Select(item => item.Id)))
+            {
+                commands.Clear();
+                removed = true;
+            }
+        }
+        return removed;
+    }
+
+    private static bool IsSscomImportedProfile(DeviceProfile profile) =>
+        profile.Description.StartsWith("从 SSCOM 导入：", StringComparison.Ordinal);
+
     private bool FilterQuickCommand(object item)
     {
         if (item is not QuickCommandItemViewModel command || string.IsNullOrWhiteSpace(QuickCommandSearchText))
@@ -2990,6 +3348,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private void ApplyQuickCommandSort()
     {
         QuickCommandsView.SortDescriptions.Clear();
+        QuickCommandsView.SortDescriptions.Add(new SortDescription(nameof(QuickCommandItemViewModel.IsPinned), ListSortDirection.Descending));
+        QuickCommandsView.SortDescriptions.Add(new SortDescription(nameof(QuickCommandItemViewModel.PinnedOrder), ListSortDirection.Ascending));
         switch (SelectedQuickCommandSort)
         {
             case "使用频率":
@@ -2999,6 +3359,20 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             case "最近使用":
                 QuickCommandsView.SortDescriptions.Add(new SortDescription(nameof(QuickCommandItemViewModel.LastUsedAt), ListSortDirection.Descending));
                 break;
+        }
+    }
+
+    private static void NormalizePinnedQuickCommandOrders(IList<QuickCommandItemViewModel> commands)
+    {
+        int order = 0;
+        foreach (QuickCommandItemViewModel command in commands
+                     .Select((item, index) => (item, index))
+                     .Where(item => item.item.IsPinned)
+                     .OrderBy(item => item.item.PinnedOrder)
+                     .ThenBy(item => item.index)
+                     .Select(item => item.item))
+        {
+            command.PinnedOrder = order++;
         }
     }
 
@@ -3114,6 +3488,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         SendRepeatEnabled = false;
         StopSendRepeat();
         bool previousSuppression = _suppressProfileSelection;
+        bool repairedSscomGroups = false;
         _suppressProfileSelection = true;
         try
         {
@@ -3172,20 +3547,46 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             SendRepeatIntervalMs = Math.Clamp(profile.Terminal.SendRepeatIntervalMs, 1, 60_000);
             ReceiveTimeoutMs = Math.Clamp(profile.Terminal.ReceiveTimeoutMs, 1, 5000);
             SelectedLineEnding = profile.Terminal.LineEnding;
-            List<QuickCommandItemViewModel> quickCommands = [];
-            foreach (QuickCommand command in profile.CommandGroups.SelectMany(group => group.Commands))
+            _quickCommandsByCategory.Clear();
+            foreach (QuickCommandCategoryOption option in QuickCommandCategories)
             {
-                QuickCommand normalizedCommand = command;
-                if (profile.Description.StartsWith("从 SSCOM 导入：", StringComparison.Ordinal)
-                    && string.Equals(command.LineEnding, "None", StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(profile.Terminal.LineEnding, "None", StringComparison.OrdinalIgnoreCase))
-                {
-                    normalizedCommand = command with { LineEnding = profile.Terminal.LineEnding };
-                }
-
-                quickCommands.Add(new QuickCommandItemViewModel(normalizedCommand));
+                _quickCommandsByCategory[option.Category] = [];
             }
-            ReplaceQuickCommands(quickCommands);
+            foreach (QuickCommandGroup group in profile.CommandGroups)
+            {
+                QuickCommandCategory category = ResolveQuickCommandCategory(profile, group);
+                List<QuickCommandItemViewModel> commands = GetQuickCommandCategoryItems(category);
+                foreach (QuickCommand command in group.Commands)
+                {
+                    QuickCommand normalizedCommand = command;
+                    if (category == QuickCommandCategory.Sscom
+                        && string.Equals(command.LineEnding, "None", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(profile.Terminal.LineEnding, "None", StringComparison.OrdinalIgnoreCase))
+                    {
+                        normalizedCommand = command with { LineEnding = profile.Terminal.LineEnding };
+                    }
+
+                    commands.Add(new QuickCommandItemViewModel(normalizedCommand));
+                }
+            }
+            foreach (List<QuickCommandItemViewModel> commands in _quickCommandsByCategory.Values)
+            {
+                NormalizePinnedQuickCommandOrders(commands);
+            }
+            repairedSscomGroups = RemoveDuplicateSscomImportedCommandCopies(profile);
+            QuickCommandCategory workspaceCategory = IsSscomImportedProfile(profile)
+                ? QuickCommandCategory.Sscom
+                : GetQuickCommandCategoryForWorkspace(mode);
+            _switchingQuickCommandCategory = true;
+            try
+            {
+                SelectedQuickCommandCategory = QuickCommandCategories.First(item => item.Category == workspaceCategory);
+            }
+            finally
+            {
+                _switchingQuickCommandCategory = false;
+            }
+            ReplaceQuickCommands(GetQuickCommandCategoryItems(SelectedQuickCommandCategory.Category));
             LoadFrameTemplates(profile.FrameTemplates.Count > 0
                 ? profile.FrameTemplates
                 : [profile.FrameTemplate]);
@@ -3194,6 +3595,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         finally
         {
             _suppressProfileSelection = previousSuppression;
+        }
+
+        if (repairedSscomGroups)
+        {
+            ScheduleProfileSave();
         }
     }
 
@@ -3240,7 +3646,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             ReceiveTimeoutMs = Math.Clamp(ReceiveTimeoutMs, 1, 5000),
             UiRecordLimit = _activeProfile?.Terminal.UiRecordLimit ?? 100_000
         },
-        CommandGroups = [new QuickCommandGroup { Name = "常用命令", Commands = QuickCommands.Select(item => item.ToModel()).ToList() }],
+        CommandGroups = CreateQuickCommandGroups(),
         FrameTemplate = _frameTemplate,
         FrameTemplates = _frameTemplates.ToList(),
         ChartBindings = _activeProfile?.ChartBindings ?? []
@@ -3453,6 +3859,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             packet.SentAsHex);
     }
 
+    private void AppendFormattedPacket(List<TerminalRecordItem> target, TransportPacket packet)
+    {
+        TimeSpan? separatorGap = _terminalWaveSeparatorTracker.Observe(
+            packet,
+            TimeSpan.FromMilliseconds(TerminalSeparatorIntervalMs));
+        if (TerminalSeparatorEnabled && separatorGap is TimeSpan gap)
+        {
+            target.Add(TerminalRecordItem.CreateSeparator(packet.Timestamp, gap));
+        }
+        target.Add(FormatPacket(packet));
+    }
+
     private async Task SaveAppSettingsAsync()
     {
         await _appSettingsSaveLock.WaitAsync().ConfigureAwait(false);
@@ -3474,6 +3892,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 FrameSummaryColumnWidth = FrameSummaryColumnWidth,
                 TerminalTextColor = App.NormalizeTerminalColor(TerminalTextColor, App.DefaultTerminalTextColor),
                 TerminalBackgroundColor = App.NormalizeTerminalColor(TerminalBackgroundColor, App.DefaultTerminalBackgroundColor),
+                TerminalSeparatorEnabled = TerminalSeparatorEnabled,
+                TerminalSeparatorIntervalMs = (int)TerminalSeparatorIntervalMs,
+                TerminalSeparatorStyle = SelectedTerminalSeparatorStyle.Character,
+                TerminalSeparatorColor = App.NormalizeTerminalColor(TerminalSeparatorColor, App.DefaultTerminalSeparatorColor),
                 GitHubRepository = GitHubRepository.Trim(),
                 AutoUpdateEnabled = AutoUpdateEnabled,
                 DebugLoggingEnabled = DebugLoggingEnabled,

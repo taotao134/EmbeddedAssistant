@@ -11,6 +11,15 @@ public enum WorkspaceMode
     Modbus
 }
 
+public enum QuickCommandCategory
+{
+    Serial,
+    Tcp,
+    Bluetooth,
+    Modbus,
+    Sscom
+}
+
 public sealed record DeviceProfile
 {
     public const int CurrentSchemaVersion = 1;
@@ -45,6 +54,7 @@ public sealed record TerminalPreferences
 public sealed record QuickCommandGroup
 {
     public string Name { get; init; } = "常用命令";
+    public QuickCommandCategory Category { get; init; } = QuickCommandCategory.Serial;
     public List<QuickCommand> Commands { get; init; } = [];
 }
 
@@ -63,6 +73,8 @@ public sealed record QuickCommand
     public string Shortcut { get; init; } = string.Empty;
     public long UsageCount { get; init; }
     public DateTimeOffset? LastUsedAt { get; init; }
+    public bool IsPinned { get; init; }
+    public int PinnedOrder { get; init; }
     public double NameColumnWeight { get; init; } = 132;
     public double PayloadColumnWeight { get; init; } = 300;
     public List<QuickCommandVariable> Variables { get; init; } = [];

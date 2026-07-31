@@ -323,13 +323,34 @@ public sealed class BleGattTransport(BleGattTransportSettings settings) : Transp
             throw new IOException("无法连接 BLE 设备。 ");
         }
 
-        GattDeviceServicesResult serviceResult = await _device.GetGattServicesForUuidAsync(serviceUuid, BluetoothCacheMode.Uncached);
-        if (serviceResult.Status != GattCommunicationStatus.Success || serviceResult.Services.Count == 0)
+        // Some Android peripherals reject the Windows UUID-filtered discovery call
+        // even though a full GATT discovery succeeds. Discover all services first,
+        // then select the configured service locally.
+        GattDeviceServicesResult serviceResult = await _device.GetGattServicesAsync(BluetoothCacheMode.Uncached);
+        if (serviceResult.Status != GattCommunicationStatus.Success)
         {
             throw new IOException($"读取 BLE 服务失败：{serviceResult.Status}。 ");
         }
 
-        _service = serviceResult.Services[0];
+        _service = serviceResult.Services.FirstOrDefault(service => service.Uuid == serviceUuid);
+        if (_service is null)
+        {
+            foreach (GattDeviceService service in serviceResult.Services)
+            {
+                service.Dispose();
+            }
+
+            throw new IOException($"未找到 BLE 服务：{serviceUuid}。 ");
+        }
+
+        foreach (GattDeviceService service in serviceResult.Services)
+        {
+            if (!ReferenceEquals(service, _service))
+            {
+                service.Dispose();
+            }
+        }
+
         GattCharacteristicsResult characteristicsResult = await _service
             .GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
         if (characteristicsResult.Status != GattCommunicationStatus.Success)

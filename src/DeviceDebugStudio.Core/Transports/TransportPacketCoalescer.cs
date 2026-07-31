@@ -80,7 +80,12 @@ public static class TransportPacketCoalescer
                     byte[] merged = new byte[pending!.Data.Length + packet.Data.Length];
                     pending.Data.CopyTo(merged, 0);
                     packet.Data.CopyTo(merged, pending.Data.Length);
-                    pending = pending with { Data = merged };
+                    pending = pending with
+                    {
+                        Data = merged,
+                        EndTimestamp = packet.EndTimestamp,
+                        EndArrivalTimestamp = packet.EndArrivalTimestamp
+                    };
                 }
                 else
                 {

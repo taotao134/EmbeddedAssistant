@@ -15,9 +15,13 @@ public sealed record TerminalRecordItem(
     bool IsMessage,
     bool? SentAsHex = null)
 {
-    public string TimeText => Timestamp.ToString("HH:mm:ss.fff");
+    public bool IsSeparator { get; init; }
+    public double SeparatorGapMilliseconds { get; init; }
+    public string SeparatorGapText => FormatSeparatorGap(SeparatorGapMilliseconds);
 
-    public string DirectionText => Direction switch
+    public string TimeText => IsSeparator ? string.Empty : Timestamp.ToString("HH:mm:ss.fff");
+
+    public string DirectionText => IsSeparator ? string.Empty : Direction switch
     {
         PacketDirection.Receive => "RX",
         PacketDirection.Send => "TX",
@@ -28,6 +32,10 @@ public sealed record TerminalRecordItem(
 
     public string GetDisplayContent(bool displayHex)
     {
+        if (IsSeparator)
+        {
+            return SeparatorGapText;
+        }
         if (IsMessage)
         {
             return ByteText.EscapeControlCharacters(Content);
@@ -56,6 +64,11 @@ public sealed record TerminalRecordItem(
         if (searchText.Length == 0)
         {
             return true;
+        }
+
+        if (IsSeparator)
+        {
+            return SeparatorGapText.Contains(searchText, StringComparison.CurrentCultureIgnoreCase);
         }
 
         return TimeText.Contains(searchText, StringComparison.OrdinalIgnoreCase)
@@ -90,4 +103,14 @@ public sealed record TerminalRecordItem(
             isMessage,
             packet.SentAsHex);
     }
+
+    public static TerminalRecordItem CreateSeparator(DateTimeOffset timestamp, TimeSpan gap) =>
+        new(timestamp, PacketDirection.Information, string.Empty, 0, [], string.Empty, true)
+        {
+            IsSeparator = true,
+            SeparatorGapMilliseconds = Math.Max(0, gap.TotalMilliseconds)
+        };
+
+    public static string FormatSeparatorGap(double gapMilliseconds) =>
+        $"间隔 {Math.Round(Math.Max(0, gapMilliseconds)).ToString("N0", CultureInfo.InvariantCulture)} ms";
 }

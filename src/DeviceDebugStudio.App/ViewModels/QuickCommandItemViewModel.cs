@@ -37,6 +37,8 @@ public partial class QuickCommandItemViewModel : ObservableObject
         shortcut = command.Shortcut;
         usageCount = command.UsageCount;
         lastUsedAt = command.LastUsedAt;
+        isPinned = command.IsPinned;
+        pinnedOrder = command.PinnedOrder;
         nameColumnWidth = CreateStarWidth(command.NameColumnWeight, 132);
         payloadColumnWidth = CreateStarWidth(command.PayloadColumnWeight, 300);
         VariableSets.CollectionChanged += OnVariableSetsCollectionChanged;
@@ -103,6 +105,12 @@ public partial class QuickCommandItemViewModel : ObservableObject
 
     [ObservableProperty]
     private DateTimeOffset? lastUsedAt;
+
+    [ObservableProperty]
+    private bool isPinned;
+
+    [ObservableProperty]
+    private int pinnedOrder;
 
     [ObservableProperty]
     private GridLength nameColumnWidth;
@@ -180,6 +188,8 @@ public partial class QuickCommandItemViewModel : ObservableObject
         Shortcut = Shortcut,
         UsageCount = UsageCount,
         LastUsedAt = LastUsedAt,
+        IsPinned = IsPinned,
+        PinnedOrder = PinnedOrder,
         NameColumnWeight = GetColumnWeight(NameColumnWidth, 132),
         PayloadColumnWeight = GetColumnWeight(PayloadColumnWidth, 300),
         Variables = [],

@@ -40,7 +40,7 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            List<DeviceProfile> profiles = [];
+            List<(DeviceProfile Profile, string Path)> profileFiles = [];
             foreach (string file in Directory.EnumerateFiles(_directory, "*.json").OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
             {
                 try
@@ -49,7 +49,7 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
                     DeviceProfile? profile = await JsonSerializer.DeserializeAsync<DeviceProfile>(stream, _options, cancellationToken).ConfigureAwait(false);
                     if (profile is not null && profile.SchemaVersion <= DeviceProfile.CurrentSchemaVersion)
                     {
-                        profiles.Add(profile);
+                        profileFiles.Add((profile, file));
                     }
                 }
                 catch (JsonException)
@@ -60,7 +60,16 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
                 }
             }
 
-            return profiles.OrderBy(profile => profile.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
+            List<(DeviceProfile Profile, string Path)> latestProfiles = profileFiles
+                .GroupBy(item => item.Profile.Id)
+                .Select(group => group.OrderByDescending(item => item.Profile.UpdatedAt).First())
+                .ToList();
+            await MigrateProfileFileNamesAsync(profileFiles, latestProfiles, cancellationToken).ConfigureAwait(false);
+
+            return latestProfiles
+                .Select(item => item.Profile)
+                .OrderBy(profile => profile.Name, StringComparer.CurrentCultureIgnoreCase)
+                .ToArray();
         }
         finally
         {
@@ -71,11 +80,12 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
     public async Task SaveAsync(DeviceProfile profile, CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(_directory);
-        string destination = GetProfilePath(profile.Id);
-        string temporary = destination + ".tmp";
+        string? temporary = null;
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            string destination = await GetProfilePathAsync(profile, cancellationToken).ConfigureAwait(false);
+            temporary = destination + ".tmp";
             await using (FileStream stream = new(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 16 * 1024, FileOptions.Asynchronous))
             {
                 await JsonSerializer.SerializeAsync(stream, profile with { UpdatedAt = DateTimeOffset.Now }, _options, cancellationToken).ConfigureAwait(false);
@@ -83,10 +93,11 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
             }
 
             File.Move(temporary, destination, true);
+            await RemoveOtherProfileCopiesAsync(profile.Id, destination, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            if (File.Exists(temporary))
+            if (temporary is not null && File.Exists(temporary))
             {
                 File.Delete(temporary);
             }
@@ -99,8 +110,7 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            string path = GetProfilePath(profileId);
-            if (File.Exists(path))
+            foreach (string path in await FindProfilePathsAsync(profileId, cancellationToken).ConfigureAwait(false))
             {
                 File.Delete(path);
             }
@@ -111,5 +121,100 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
         }
     }
 
-    private string GetProfilePath(Guid id) => Path.Combine(_directory, $"{id:N}.json");
+    private async Task<string> GetProfilePathAsync(DeviceProfile profile, CancellationToken cancellationToken)
+    {
+        string stem = GetSafeFileName(profile.Name);
+        string candidate = Path.Combine(_directory, $"{stem}.json");
+        int suffix = 2;
+        while (File.Exists(candidate))
+        {
+            Guid? existingId = await TryReadProfileIdAsync(candidate, cancellationToken).ConfigureAwait(false);
+            if (existingId == profile.Id)
+            {
+                return candidate;
+            }
+
+            candidate = Path.Combine(_directory, $"{stem}_{suffix}.json");
+            suffix++;
+        }
+
+        return candidate;
+    }
+
+    private async Task MigrateProfileFileNamesAsync(
+        IReadOnlyList<(DeviceProfile Profile, string Path)> profileFiles,
+        IReadOnlyList<(DeviceProfile Profile, string Path)> latestProfiles,
+        CancellationToken cancellationToken)
+    {
+        foreach ((DeviceProfile profile, string source) in latestProfiles)
+        {
+            string destination = await GetProfilePathAsync(profile, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(source, destination, StringComparison.OrdinalIgnoreCase))
+            {
+                File.Move(source, destination, true);
+            }
+
+            foreach ((DeviceProfile copy, string path) in profileFiles.Where(item => item.Profile.Id == profile.Id))
+            {
+                if (!string.Equals(path, destination, StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+        }
+    }
+
+    private async Task RemoveOtherProfileCopiesAsync(Guid profileId, string destination, CancellationToken cancellationToken)
+    {
+        foreach (string path in await FindProfilePathsAsync(profileId, cancellationToken).ConfigureAwait(false))
+        {
+            if (!string.Equals(path, destination, StringComparison.OrdinalIgnoreCase))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    private async Task<List<string>> FindProfilePathsAsync(Guid profileId, CancellationToken cancellationToken)
+    {
+        List<string> paths = [];
+        foreach (string path in Directory.EnumerateFiles(_directory, "*.json"))
+        {
+            if (await TryReadProfileIdAsync(path, cancellationToken).ConfigureAwait(false) == profileId)
+            {
+                paths.Add(path);
+            }
+        }
+        return paths;
+    }
+
+    private async Task<Guid?> TryReadProfileIdAsync(string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using FileStream stream = File.OpenRead(path);
+            DeviceProfile? profile = await JsonSerializer.DeserializeAsync<DeviceProfile>(stream, _options, cancellationToken).ConfigureAwait(false);
+            return profile?.Id;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
+
+    private static string GetSafeFileName(string name)
+    {
+        string value = string.IsNullOrWhiteSpace(name) ? "未命名设备" : name.Trim();
+        foreach (char invalid in Path.GetInvalidFileNameChars())
+        {
+            value = value.Replace(invalid, '_');
+        }
+
+        value = value.Trim(' ', '.');
+        return string.IsNullOrEmpty(value) ? "未命名设备" : value;
+    }
 }

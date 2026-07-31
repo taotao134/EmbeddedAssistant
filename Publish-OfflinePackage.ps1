@@ -15,7 +15,16 @@ if (-not (Test-Path -LiteralPath $dotnet)) {
     throw 'The .NET SDK was not found.'
 }
 
-Get-Process DeviceDebugStudio -ErrorAction SilentlyContinue | Stop-Process -Force
+$runningProcesses = @(Get-Process DeviceDebugStudio -ErrorAction SilentlyContinue)
+if ($runningProcesses.Count -gt 0) {
+    try {
+        $runningProcesses | Stop-Process -Force -ErrorAction Stop
+        Start-Sleep -Milliseconds 500
+    }
+    catch {
+        throw 'DeviceDebugStudio is running and cannot be closed with the current permissions. Close it manually, then run this script again.'
+    }
+}
 
 & $dotnet test $solution -c Release
 if ($LASTEXITCODE -ne 0) {
