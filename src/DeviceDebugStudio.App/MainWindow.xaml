@@ -17,11 +17,14 @@
                  MinHeight="620"
                  FontSize="12"
                  Background="{DynamicResource WorkspaceBackgroundBrush}"
+                 TextOptions.TextFormattingMode="Display"
+                 TextOptions.TextRenderingMode="ClearType"
                  UseLayoutRounding="True"
                  SnapsToDevicePixels="True"
                  WindowStartupLocation="CenterScreen"
-                 ExtendsContentIntoTitleBar="True"
-                 SizeChanged="OnWindowSizeChanged"
+                  ExtendsContentIntoTitleBar="True"
+                  Tag="Normal"
+                  SizeChanged="OnWindowSizeChanged"
                   Closing="OnWindowClosing">
     <ui:FluentWindow.Resources>
         <converters:TerminalDisplayTextConverter x:Key="TerminalDisplayTextConverter" />
@@ -113,6 +116,48 @@
             <Setter Property="FontSize" Value="10" />
             <Setter Property="Margin" Value="2,0,0,2" />
         </Style>
+        <Style x:Key="SendOptionLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundBrush}" />
+            <Setter Property="Margin" Value="0,0,0,2" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="QuickCommandActionButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource CompactIconButtonStyle}">
+            <Setter Property="Width" Value="26" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Margin" Value="2,0" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                             Value="Compact">
+                    <Setter Property="Width" Value="24" />
+                    <Setter Property="Height" Value="24" />
+                    <Setter Property="Margin" Value="1,0" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="QuickCommandActionIconStyle" TargetType="ui:SymbolIcon">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="Height" Value="12" />
+            <Setter Property="FontSize" Value="12" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                             Value="Compact">
+                    <Setter Property="Width" Value="10" />
+                    <Setter Property="Height" Value="10" />
+                    <Setter Property="FontSize" Value="10" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <DropShadowEffect x:Key="QuickCommandEditorShadowEffect"
+                          Color="#26364A"
+                          BlurRadius="12"
+                          ShadowDepth="3"
+                          Opacity="0.18" />
     </ui:FluentWindow.Resources>
     <Grid x:Name="WindowLayoutRoot" Background="{DynamicResource WorkspaceBackgroundBrush}">
         <Grid.RowDefinitions>
@@ -188,7 +233,18 @@
                     Background="{DynamicResource SidebarBackgroundBrush}"
                     BorderBrush="{DynamicResource DividerBrush}"
                     BorderThickness="0,0,1,0">
-                <Grid Margin="10">
+                <Grid x:Name="DevicePanelContentGrid">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Margin" Value="10" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                             Value="Compact">
+                                    <Setter Property="Margin" Value="6" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
@@ -256,12 +312,38 @@
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Grid Margin="4,5" MinHeight="38">
+                                <Grid>
+                                    <Grid.Style>
+                                        <Style TargetType="Grid">
+                                            <Setter Property="Margin" Value="4,5" />
+                                            <Setter Property="MinHeight" Value="38" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                             Value="Compact">
+                                                    <Setter Property="Margin" Value="2,3" />
+                                                    <Setter Property="MinHeight" Value="34" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Grid.Style>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="32" />
+                                        <ColumnDefinition Width="28" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <Border Width="26" Height="26" Background="{DynamicResource PanelBackgroundBrush}" CornerRadius="4">
+                                    <Border Background="{DynamicResource PanelBackgroundBrush}" CornerRadius="4">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Width" Value="26" />
+                                                <Setter Property="Height" Value="26" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                                 Value="Compact">
+                                                        <Setter Property="Width" Value="22" />
+                                                        <Setter Property="Height" Value="22" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
                                         <ui:SymbolIcon Foreground="{DynamicResource AccentBrush}">
                                             <ui:SymbolIcon.Style>
                                                 <Style TargetType="{x:Type ui:SymbolIcon}">
@@ -285,8 +367,12 @@
                                         </ui:SymbolIcon>
                                     </Border>
                                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock FontSize="11" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding Transport.Kind}" />
+                                        <TextBlock Text="{Binding Name}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Name}" />
+                                        <TextBlock FontSize="11"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   Text="{Binding Transport.Kind}" />
                                     </StackPanel>
                                 </Grid>
                             </DataTemplate>
@@ -300,7 +386,7 @@
                                 Margin="0,0,0,6"
                                 Padding="8,6"
                                 HorizontalContentAlignment="Left"
-                                Style="{StaticResource PrimaryButtonStyle}"
+                                Style="{StaticResource RoundedButtonStyle}"
                                 Click="OnOpenProfileActionsClick">
                             <Button.ContextMenu>
                                 <ContextMenu x:Name="ProfileActionsMenu">
@@ -448,19 +534,27 @@
                         Background="{DynamicResource PanelBackgroundBrush}"
                         BorderBrush="{DynamicResource DividerBrush}"
                         BorderThickness="0,0,0,1">
-                    <Grid VerticalAlignment="Center">
+                    <Grid x:Name="ConnectionHeaderGrid" VerticalAlignment="Center">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="1" Margin="10,0,0,0" Orientation="Horizontal" VerticalAlignment="Center">
-                            <ui:ToggleSwitch Height="24"
+                        <StackPanel x:Name="ConnectionActionsPanel"
+                                    Grid.Column="1"
+                                    Margin="10,0,0,0"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <ui:ToggleSwitch x:Name="AutoReconnectToggle"
+                                             Height="24"
                                              Margin="0,0,8,0"
                                              FontSize="10"
+                                             FontWeight="Normal"
+                                             Foreground="{DynamicResource ButtonForegroundBrush}"
                                              Content="{Binding AutoReconnectText}"
                                              IsChecked="{Binding AutoReconnect, Mode=TwoWay}"
                                              ToolTip="仅在连接意外中断时自动重连；手动点击断开不会自动重连" />
-                            <Button Height="24"
+                            <Button x:Name="ConnectionActionButton"
+                                    Height="24"
                                     MinHeight="24"
                                     Padding="6,2"
                                     FontSize="10"
@@ -473,7 +567,8 @@
                             </Button>
                         </StackPanel>
 
-                        <ScrollViewer Grid.Column="0"
+                        <ScrollViewer x:Name="ConnectionParametersScrollViewer"
+                                      Grid.Column="0"
                                       Style="{StaticResource SeparatedHorizontalScrollViewerStyle}"
                                       HorizontalAlignment="Stretch"
                                       VerticalAlignment="Center"
@@ -712,20 +807,22 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                                 <RowDefinition Height="8" />
-                                <RowDefinition Height="126" MinHeight="126" MaxHeight="346" />
-                            </Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" MinHeight="126" MaxHeight="346" />
+                        </Grid.RowDefinitions>
 
-                            <Grid Margin="0,0,0,6">
+                            <Grid x:Name="TerminalToolbarGrid" Margin="0,0,0,4" MinHeight="32">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="260" />
-                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition x:Name="TerminalSearchColumn" Width="260" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="1" Margin="10,0,0,0" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <ui:ToggleSwitch Height="24" Margin="0,0,8,0" FontSize="11" Content="HEX" FocusVisualStyle="{x:Null}" IsChecked="{Binding ReceiveAsHex}" ToolTip="HEX 显示：仅切换通信记录显示，不影响发送格式" />
-                                    <ui:ToggleSwitch Height="24" Margin="0,0,8,0" FontSize="11" Content="暂停显示" FocusVisualStyle="{x:Null}" IsChecked="{Binding IsPaused}" ToolTip="暂停把新通信记录加入终端显示；连接和接收计数继续运行" />
-                                    <ui:ToggleSwitch Height="24" Margin="0,0,6,0" FontSize="11" Content="自动滚动" FocusVisualStyle="{x:Null}" IsChecked="{Binding AutoScroll}" ToolTip="显示新记录时自动滚动到底部，不影响数据接收" />
-                                    <ui:ToggleSwitch Height="24" Margin="0,0,6,0" FontSize="11" Content="记录" FocusVisualStyle="{x:Null}" IsChecked="{Binding CaptureCommunication}" ToolTip="开启后从下一次连接开始，将通信收发数据保存为 SQLite 捕获文件" />
+                                <WrapPanel x:Name="TerminalToolsPanel"
+                                           Grid.Column="1"
+                                           Margin="10,0,0,0"
+                                           VerticalAlignment="Center">
+                                    <ui:ToggleSwitch Height="24" Margin="0,0,8,3" FontSize="11" FontWeight="Normal" Foreground="{DynamicResource ButtonForegroundBrush}" Content="HEX" FocusVisualStyle="{x:Null}" IsChecked="{Binding ReceiveAsHex}" ToolTip="HEX 显示：仅切换通信记录显示，不影响发送格式" />
+                                    <ui:ToggleSwitch Height="24" Margin="0,0,8,3" FontSize="11" FontWeight="Normal" Foreground="{DynamicResource ButtonForegroundBrush}" Content="暂停显示" FocusVisualStyle="{x:Null}" IsChecked="{Binding IsPaused}" ToolTip="暂停把新通信记录加入终端显示；连接和接收计数继续运行" />
+                                    <ui:ToggleSwitch Height="24" Margin="0,0,6,3" FontSize="11" FontWeight="Normal" Foreground="{DynamicResource ButtonForegroundBrush}" Content="自动滚动" FocusVisualStyle="{x:Null}" IsChecked="{Binding AutoScroll}" ToolTip="显示新记录时自动滚动到底部，不影响数据接收" />
+                                    <ui:ToggleSwitch Height="24" Margin="0,0,6,3" FontSize="11" FontWeight="Normal" Foreground="{DynamicResource ButtonForegroundBrush}" Content="记录" FocusVisualStyle="{x:Null}" IsChecked="{Binding CaptureCommunication}" ToolTip="开启后从下一次连接开始，将通信收发数据保存为 SQLite 捕获文件" />
                                     <Button Style="{StaticResource CompactIconButtonStyle}"
                                             ToolTip="清空显示"
                                             Command="{Binding ClearTerminalCommand}">
@@ -752,10 +849,12 @@
                                         </Button.ContextMenu>
                                         <ui:SymbolIcon Symbol="MoreHorizontal20" Width="14" Height="14" />
                                     </Button>
-                                </StackPanel>
-                                <Border Grid.Column="0"
+                                </WrapPanel>
+                                <Border x:Name="TerminalSearchBorder"
+                                        Grid.Column="0"
                                         Width="260"
-                                        MinHeight="32"
+                                        Height="30"
+                                        MinHeight="28"
                                         HorizontalAlignment="Left"
                                         Background="{DynamicResource PanelBackgroundBrush}"
                                         BorderThickness="1"
@@ -778,17 +877,20 @@
                                             <ColumnDefinition Width="34" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
-                                        <ui:SymbolIcon Grid.Column="0"
+                                        <ui:SymbolIcon x:Name="TerminalSearchIcon"
+                                                       Grid.Column="0"
                                                        Width="16"
                                                        Height="16"
                                                        HorizontalAlignment="Center"
                                                        VerticalAlignment="Center"
                                                        Symbol="Search20"
                                                        IsHitTestVisible="False" />
-                                        <TextBox Grid.Column="1"
+                                        <TextBox x:Name="TerminalSearchTextBox"
+                                                 Grid.Column="1"
                                                  Style="{StaticResource CompactTextBoxStyle}"
-                                                 MinHeight="28"
-                                                 Padding="4,3,7,3"
+                                                 Height="28"
+                                                 MinHeight="0"
+                                                 Padding="4,1,7,1"
                                                  FontSize="13"
                                                  Background="Transparent"
                                                  BorderThickness="0"
@@ -804,26 +906,61 @@
                                         Background="Transparent"
                                         SelectionChanged="OnTerminalDisplaySelectionChanged">
                                 <TabItem x:Name="TerminalPlainTextTab" Header="连续文本">
-                                    <RichTextBox x:Name="TerminalPlainTextBox"
-                                                 Style="{StaticResource TerminalPlainTextBoxStyle}"
-                                                 FontSize="{Binding TerminalFontSize}">
-                                        <RichTextBox.Document>
-                                            <FlowDocument PagePadding="0" PageWidth="100000" ColumnWidth="100000">
-                                                <Paragraph Margin="0" />
-                                            </FlowDocument>
-                                        </RichTextBox.Document>
-                                        <RichTextBox.ContextMenu>
-                                            <ContextMenu>
-                                                <MenuItem Header="复制" Command="{x:Static ApplicationCommands.Copy}" />
-                                                <MenuItem Header="全选" Click="OnSelectAllTerminalTextClick" />
-                                                <Separator />
-                                                <MenuItem Header="保存连续文本 TXT" Click="OnSaveTerminalPlainTextClick" />
-                                            </ContextMenu>
-                                        </RichTextBox.ContextMenu>
-                                    </RichTextBox>
+                                    <Grid>
+                                        <Border Background="{DynamicResource TerminalBackgroundBrush}"
+                                                BorderBrush="{DynamicResource DividerBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="5">
+                                            <RichTextBox x:Name="TerminalPlainTextBox"
+                                                         Style="{StaticResource TerminalPlainTextBoxStyle}"
+                                                         FontSize="{Binding TerminalFontSize}">
+                                                <RichTextBox.Document>
+                                                    <FlowDocument PagePadding="0" PageWidth="100000" ColumnWidth="100000">
+                                                        <Paragraph Margin="0" />
+                                                    </FlowDocument>
+                                                </RichTextBox.Document>
+                                                <RichTextBox.ContextMenu>
+                                                    <ContextMenu>
+                                                        <MenuItem Header="复制" Command="{x:Static ApplicationCommands.Copy}" />
+                                                        <MenuItem Header="全选" Click="OnSelectAllTerminalTextClick" />
+                                                        <Separator />
+                                                        <MenuItem Header="保存连续文本 TXT" Click="OnSaveTerminalPlainTextClick" />
+                                                    </ContextMenu>
+                                                </RichTextBox.ContextMenu>
+                                            </RichTextBox>
+                                        </Border>
+                                        <Border IsHitTestVisible="False"
+                                                Panel.ZIndex="1"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center"
+                                                Padding="0"
+                                                Background="Transparent">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding TerminalRecords.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <TextBlock HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                           FontSize="11"
+                                                           FontWeight="Normal"
+                                                           Foreground="{DynamicResource MutedTextBrush}"
+                                                           Text="暂无通信数据" />
+                                        </Border>
+                                    </Grid>
                                 </TabItem>
                                 <TabItem x:Name="TerminalTableTab" Header="表格">
-                                    <ListView x:Name="TerminalList"
+                                    <Grid>
+                                        <Border Background="{DynamicResource TerminalBackgroundBrush}"
+                                                BorderBrush="{DynamicResource DividerBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="5">
+                                            <ListView x:Name="TerminalList"
                                       ItemsSource="{Binding TerminalRecords}"
                                       SelectionMode="Extended"
                                       SizeChanged="OnTerminalListSizeChanged"
@@ -981,7 +1118,35 @@
                                         </GridViewColumn>
                                     </GridView>
                                 </ListView.View>
-                                    </ListView>
+                                            </ListView>
+                                        </Border>
+                                        <Border IsHitTestVisible="False"
+                                                Panel.ZIndex="1"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center"
+                                                Padding="10"
+                                                Background="{DynamicResource TerminalBackgroundBrush}"
+                                                CornerRadius="5">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding TerminalRecords.Count}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                <TextBlock Margin="0"
+                                                            HorizontalAlignment="Center"
+                                                            FontSize="11"
+                                                           FontWeight="Normal"
+                                                           Foreground="{DynamicResource MutedTextBrush}"
+                                                           Text="暂无通信数据" />
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
                                 </TabItem>
                             </TabControl>
 
@@ -1009,7 +1174,13 @@
                                 </GridSplitter.Template>
                             </GridSplitter>
 
-                            <Border Grid.Row="3" Padding="6" Background="{DynamicResource PanelBackgroundBrush}" BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1" CornerRadius="4">
+                            <Border Grid.Row="3"
+                                    Padding="6"
+                                    Background="{DynamicResource PanelBackgroundBrush}"
+                                    BorderBrush="{DynamicResource DividerBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    TextElement.FontWeight="Normal">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
@@ -1023,31 +1194,45 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Style="{StaticResource ConnectionFieldLabelStyle}" Text="编码" />
-                                    <TextBlock Grid.Column="1" Style="{StaticResource ConnectionFieldLabelStyle}" Text="换行符" />
-                                    <TextBlock Grid.Column="2" Style="{StaticResource ConnectionFieldLabelStyle}" Text="校验" />
+                                    <TextBlock Grid.Column="0" Style="{StaticResource SendOptionLabelStyle}" Text="编码" />
+                                    <TextBlock Grid.Column="1" Style="{StaticResource SendOptionLabelStyle}" Text="换行符" />
+                                    <TextBlock Grid.Column="2" Style="{StaticResource SendOptionLabelStyle}" Text="校验" />
                                     <ComboBox Grid.Row="1" Grid.Column="0" Height="24" Margin="0,0,4,4" Style="{StaticResource ConnectionComboBoxStyle}" ItemsSource="{Binding EncodingNames}" SelectedItem="{Binding SelectedEncodingName}" />
                                     <ComboBox Grid.Row="1" Grid.Column="1" Height="24" Margin="0,0,4,4" Style="{StaticResource ConnectionComboBoxStyle}" ItemsSource="{Binding LineEndings}" SelectedItem="{Binding SelectedLineEnding}" />
                                     <ComboBox Grid.Row="1" Grid.Column="2" Height="24" Margin="0,0,4,4" Style="{StaticResource ConnectionComboBoxStyle}" ItemsSource="{Binding ChecksumKinds}" SelectedItem="{Binding SelectedSendChecksum}" />
-                                    <StackPanel Grid.Row="1" Grid.Column="3" Margin="0,0,4,4" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
-                                        <ui:ToggleSwitch Height="24" Margin="0,0,8,0" FontSize="10" Content="HEX 发送" IsChecked="{Binding SendAsHex}" ToolTip="开启后按十六进制字节解析发送框内容" />
+                                    <WrapPanel Grid.Row="1" Grid.Column="3" Margin="0,0,4,4" HorizontalAlignment="Left" VerticalAlignment="Center">
                                         <ui:ToggleSwitch Height="24"
-                                                         Margin="0,0,4,0"
+                                                         Margin="0,0,8,3"
                                                          FontSize="10"
+                                                         FontWeight="Normal"
+                                                         Foreground="{DynamicResource ButtonForegroundBrush}"
+                                                         Content="HEX 发送"
+                                                         IsChecked="{Binding SendAsHex}"
+                                                         ToolTip="开启后按十六进制字节解析发送框内容" />
+                                        <ui:ToggleSwitch Height="24"
+                                                         Margin="0,0,4,3"
+                                                         FontSize="10"
+                                                         FontWeight="Normal"
+                                                         Foreground="{DynamicResource ButtonForegroundBrush}"
                                                          Content="循环发送"
                                                          FocusVisualStyle="{x:Null}"
                                                          IsChecked="{Binding SendRepeatEnabled, Mode=TwoWay}"
                                                          ToolTip="启用循环发送；已连接且发送框非空时开始按间隔发送" />
                                         <TextBox Width="50"
                                                  Height="24"
-                                                 Margin="0,0,2,0"
+                                                 Margin="0,0,2,3"
                                                  Style="{StaticResource ConnectionTextBoxStyle}"
                                                  FontSize="10"
                                                  HorizontalContentAlignment="Center"
                                                  Text="{Binding SendRepeatIntervalMs, UpdateSourceTrigger=PropertyChanged}"
                                                  ToolTip="循环发送间隔，单位 ms" />
-                                        <TextBlock Margin="0,0,7,0" VerticalAlignment="Center" FontSize="10" Text="ms" />
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Margin="0,0,7,3"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="10"
+                                                   FontWeight="Normal"
+                                                   Foreground="{DynamicResource ButtonForegroundBrush}"
+                                                   Text="ms" />
+                                         <StackPanel Margin="0,0,0,3" Orientation="Horizontal" VerticalAlignment="Center">
                                             <StackPanel.Style>
                                                 <Style TargetType="StackPanel">
                                                     <Setter Property="Visibility" Value="Collapsed" />
@@ -1058,7 +1243,12 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </StackPanel.Style>
-                                            <TextBlock Margin="0,0,3,0" VerticalAlignment="Center" FontSize="10" Text="收包超时" />
+                                            <TextBlock Margin="0,0,3,0"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="10"
+                                                       FontWeight="Normal"
+                                                       Foreground="{DynamicResource ButtonForegroundBrush}"
+                                                       Text="收包超时" />
                                             <TextBox Width="38"
                                                      Height="24"
                                                      Style="{StaticResource ConnectionTextBoxStyle}"
@@ -1066,9 +1256,14 @@
                                                      HorizontalContentAlignment="Center"
                                                      Text="{Binding ReceiveTimeoutMs, UpdateSourceTrigger=PropertyChanged}"
                                                      ToolTip="仅串口有效；不同底层读取在此间隔内合并为一条记录" />
-                                            <TextBlock Margin="2,0,0,0" VerticalAlignment="Center" FontSize="10" Text="ms" />
+                                            <TextBlock Margin="2,0,0,0"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="10"
+                                                       FontWeight="Normal"
+                                                       Foreground="{DynamicResource ButtonForegroundBrush}"
+                                                       Text="ms" />
                                         </StackPanel>
-                                    </StackPanel>
+                                    </WrapPanel>
                                     <Button Grid.Row="1"
                                             Grid.Column="4"
                                             MinWidth="86"
@@ -1083,7 +1278,17 @@
                                             <TextBlock Text="发送文件" />
                                         </StackPanel>
                                     </Button>
-                                    <TextBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="4" MinHeight="52" Padding="7,5" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Text="{Binding SendText, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Grid.Row="2"
+                                             Grid.Column="0"
+                                             Grid.ColumnSpan="4"
+                                             MinHeight="52"
+                                             Padding="7,5"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             VerticalContentAlignment="Top"
+                                             VerticalScrollBarVisibility="Auto"
+                                             Style="{StaticResource CompactTextBoxStyle}"
+                                             Text="{Binding SendText, UpdateSourceTrigger=PropertyChanged}" />
                                     <Button Grid.Row="2" Grid.Column="4" Height="52" Margin="6,0,0,0" VerticalAlignment="Bottom" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding SendCommand}">
                                         <StackPanel Orientation="Horizontal">
                                             <ui:SymbolIcon Width="14" Height="14" Margin="0,0,3,0" Symbol="Send20" />
@@ -1451,7 +1656,18 @@
                     Background="{DynamicResource SidebarBackgroundBrush}"
                     BorderBrush="{DynamicResource DividerBrush}"
                     BorderThickness="1,0,0,0">
-                <Grid Margin="8">
+                <Grid>
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Margin" Value="8" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                             Value="Compact">
+                                    <Setter Property="Margin" Value="6" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
@@ -1539,17 +1755,31 @@
                              PreviewDragOver="OnQuickCommandDragOver"
                              PreviewDragLeave="OnQuickCommandDragLeave"
                              PreviewDrop="OnQuickCommandDrop"
-                             PreviewMouseWheel="OnQuickCommandsListPreviewMouseWheel"
-                             BorderThickness="0"
+                              PreviewMouseWheel="OnQuickCommandsListPreviewMouseWheel"
+                              Margin="0,0,0,3"
+                              Background="{DynamicResource QuickCommandListCanvasBrush}"
+                             BorderBrush="{DynamicResource DividerBrush}"
+                             BorderThickness="1"
                              ScrollViewer.CanContentScroll="True"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              VirtualizingPanel.CacheLength="0.5,0.5"
                              VirtualizingPanel.CacheLengthUnit="Page"
                              VirtualizingPanel.IsVirtualizing="True"
-                             VirtualizingPanel.IsVirtualizingWhenGrouping="True"
-                             VirtualizingPanel.ScrollUnit="Pixel"
-                             VirtualizingPanel.VirtualizationMode="Recycling">
+                              VirtualizingPanel.IsVirtualizingWhenGrouping="True"
+                              VirtualizingPanel.ScrollUnit="Pixel"
+                              VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListBox.Style>
+                            <Style TargetType="ListBox">
+                                <Setter Property="Padding" Value="3" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                 Value="Compact">
+                                        <Setter Property="Padding" Value="2" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListBox.Style>
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="MinHeight" Value="36" />
@@ -1604,6 +1834,12 @@
                                         </ControlTemplate>
                                     </Setter.Value>
                                 </Setter>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                 Value="Compact">
+                                        <Setter Property="Margin" Value="0,1,14,1" />
+                                    </DataTrigger>
+                                </Style.Triggers>
                             </Style>
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
@@ -1616,11 +1852,11 @@
                                                 <RowDefinition Height="Auto" />
                                             </Grid.RowDefinitions>
                                             <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="28" />
+                                                <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="{Binding NameColumnWidth, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MinWidth="64" />
                                                 <ColumnDefinition Width="8" />
-                                                 <ColumnDefinition Width="{Binding PayloadColumnWidth, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MinWidth="56" />
-                                                 <ColumnDefinition Width="28" />
+                                                <ColumnDefinition Width="{Binding PayloadColumnWidth, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MinWidth="56" />
+                                                <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                             <CheckBox Grid.Column="0"
                                                       Width="24"
@@ -1686,18 +1922,13 @@
                                                      Text="{Binding Payload, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                       PreviewMouseLeftButtonDown="OnQuickCommandPayloadPreviewMouseLeftButtonDown"
                                                       ToolTip="{Binding Payload}" />
-                                             <Button Grid.Column="4"
-                                                    Style="{StaticResource CompactIconButtonStyle}"
-                                                    Width="24"
-                                                    Height="24"
-                                                    Margin="1,0,1,1"
-                                                    ToolTip="发送"
+                                            <Button Grid.Column="4"
+                                                     Style="{StaticResource QuickCommandActionButtonStyle}"
+                                                     ToolTip="发送"
                                                     Command="{Binding DataContext.SendQuickCommandCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}">
                                                 <ui:SymbolIcon Symbol="Send20"
-                                                               Width="13"
-                                                               Height="13"
-                                                               FontSize="13"
+                                                               Style="{StaticResource QuickCommandActionIconStyle}"
                                                                HorizontalAlignment="Center"
                                                                VerticalAlignment="Center" />
                                             </Button>
@@ -1706,30 +1937,25 @@
                                             <Grid Grid.Row="1"
                                                   Grid.Column="0"
                                                   Grid.ColumnSpan="5"
-                                                  Height="30"
+                                                   Height="28"
                                                   Margin="0,3,0,0"
                                                   HorizontalAlignment="Stretch">
                                                 <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="28" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="54" />
                                                     <ColumnDefinition Width="64" />
-                                                    <ColumnDefinition Width="76" />
-                                                    <ColumnDefinition Width="86" />
-                                                    <ColumnDefinition Width="82" />
-                                                    <ColumnDefinition Width="28" />
-                                                    <ColumnDefinition Width="28" />
-                                                    <ColumnDefinition Width="28" />
-                                                    <ColumnDefinition Width="28" />
+                                                    <ColumnDefinition Width="68" />
+                                                    <ColumnDefinition Width="*" MinWidth="68" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
-                                                <Button Grid.Column="0"
-                                                        Width="26"
-                                                        MinWidth="0"
-                                                        Height="26"
-                                                        MinHeight="0"
-                                                        Margin="1,0"
-                                                        Command="{Binding DataContext.ToggleQuickCommandPinCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                 <Button Grid.Column="0"
+                                                         Command="{Binding DataContext.ToggleQuickCommandPinCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}">
                                                     <Button.Style>
-                                                        <Style TargetType="Button" BasedOn="{StaticResource CompactIconButtonStyle}">
+                                                         <Style TargetType="Button" BasedOn="{StaticResource QuickCommandActionButtonStyle}">
                                                             <Setter Property="ToolTip" Value="置顶指令" />
                                                             <Style.Triggers>
                                                                 <DataTrigger Binding="{Binding IsPinned}" Value="True">
@@ -1741,9 +1967,9 @@
                                                             </Style.Triggers>
                                                         </Style>
                                                     </Button.Style>
-                                                    <ui:SymbolIcon Width="13" Height="13" FontSize="13">
+                                                      <ui:SymbolIcon>
                                                         <ui:SymbolIcon.Style>
-                                                            <Style TargetType="ui:SymbolIcon">
+                                                            <Style TargetType="ui:SymbolIcon" BasedOn="{StaticResource QuickCommandActionIconStyle}">
                                                                 <Setter Property="Symbol" Value="Pin20" />
                                                                 <Style.Triggers>
                                                                     <DataTrigger Binding="{Binding IsPinned}" Value="True">
@@ -1794,7 +2020,11 @@
                                                           ItemsSource="{Binding DataContext.ChecksumKinds, RelativeSource={RelativeSource AncestorType=Window}}"
                                                           SelectedItem="{Binding Checksum}"
                                                           ToolTip="自动追加校验" />
-                                                  <Grid Grid.Column="4" Height="26" Margin="1,0">
+                                                  <Grid Grid.Column="4"
+                                                        Width="72"
+                                                        Height="26"
+                                                        Margin="1,0"
+                                                        HorizontalAlignment="Left">
                                                     <TextBox Style="{StaticResource ConnectionTextBoxStyle}"
                                                              MinWidth="0"
                                                              Height="26"
@@ -1813,21 +2043,16 @@
                                                                Text="ms" />
                                                 </Grid>
                                                   <Button Grid.Column="5"
-                                                        Style="{StaticResource CompactIconButtonStyle}"
-                                                        Width="26"
-                                                        MinWidth="0"
-                                                        Height="26"
-                                                        MinHeight="0"
-                                                        Margin="1,0"
+                                                         Style="{StaticResource QuickCommandActionButtonStyle}"
                                                         ToolTip="开始或停止循环发送"
                                                         ToolTipService.ShowOnDisabled="True"
                                                         ToolTipService.InitialShowDelay="200"
                                                         ToolTipService.ShowDuration="5000"
                                                         Command="{Binding DataContext.ToggleQuickRepeatCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}">
-                                                    <ui:SymbolIcon Width="12" Height="12" FontSize="12">
+                                                    <ui:SymbolIcon>
                                                         <ui:SymbolIcon.Style>
-                                                            <Style TargetType="ui:SymbolIcon">
+                                                            <Style TargetType="ui:SymbolIcon" BasedOn="{StaticResource QuickCommandActionIconStyle}">
                                                                 <Setter Property="Symbol" Value="ArrowRepeatAll20" />
                                                                 <Style.Triggers>
                                                                     <DataTrigger Binding="{Binding IsRepeating}" Value="True">
@@ -1838,41 +2063,28 @@
                                                         </ui:SymbolIcon.Style>
                                                     </ui:SymbolIcon>
                                                 </Button>
-                                                <Button x:Name="QuickCommandDragHandle"
-                                                         Grid.Column="6"
-                                                        Style="{StaticResource CompactIconButtonStyle}"
-                                                        Width="26"
-                                                        MinWidth="0"
-                                                        Height="26"
-                                                        MinHeight="0"
-                                                        Margin="1,0"
+                                                  <Button x:Name="QuickCommandDragHandle"
+                                                          Grid.Column="6"
+                                                         Style="{StaticResource QuickCommandActionButtonStyle}"
                                                         Cursor="SizeAll"
                                                         Focusable="False"
                                                         ToolTip="按住拖动调整顺序">
-                                                    <ui:SymbolIcon Symbol="ArrowMove20" Width="12" Height="12" FontSize="12" />
+                                                     <ui:SymbolIcon Symbol="ArrowMove20"
+                                                                    Style="{StaticResource QuickCommandActionIconStyle}" />
                                                 </Button>
                                                   <Button Grid.Column="7"
-                                                        Style="{StaticResource CompactIconButtonStyle}"
-                                                        Width="26"
-                                                        MinWidth="0"
-                                                        Height="26"
-                                                        MinHeight="0"
-                                                        Margin="1,0"
+                                                         Style="{StaticResource QuickCommandActionButtonStyle}"
                                                         ToolTip="删除"
                                                         Command="{Binding DataContext.DeleteQuickCommandCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}">
-                                                    <ui:SymbolIcon Symbol="Delete20" Width="12" Height="12" FontSize="12" />
+                                                     <ui:SymbolIcon Symbol="Delete20"
+                                                                    Style="{StaticResource QuickCommandActionIconStyle}" />
                                                 </Button>
-                                                 <Button x:Name="QuickCommandEditorToggleButton"
-                                                          Grid.Column="8"
-                                                        Width="26"
-                                                        MinWidth="0"
-                                                        Height="26"
-                                                        MinHeight="0"
-                                                        Margin="1,0"
-                                                        Click="OnToggleQuickCommandEditorClick">
-                                                    <Button.Style>
-                                                        <Style TargetType="Button" BasedOn="{StaticResource CompactIconButtonStyle}">
+                                                  <Button x:Name="QuickCommandEditorToggleButton"
+                                                           Grid.Column="8"
+                                                         Click="OnToggleQuickCommandEditorClick">
+                                                     <Button.Style>
+                                                         <Style TargetType="Button" BasedOn="{StaticResource QuickCommandActionButtonStyle}">
                                                             <Setter Property="ToolTip" Value="展开快捷参数" />
                                                             <Style.Triggers>
                                                                 <DataTrigger Binding="{Binding IsExpanded}" Value="True">
@@ -1881,9 +2093,9 @@
                                                             </Style.Triggers>
                                                         </Style>
                                                     </Button.Style>
-                                                    <ui:SymbolIcon Width="12" Height="12" FontSize="12">
-                                                        <ui:SymbolIcon.Style>
-                                                            <Style TargetType="ui:SymbolIcon">
+                                                     <ui:SymbolIcon>
+                                                         <ui:SymbolIcon.Style>
+                                                             <Style TargetType="ui:SymbolIcon" BasedOn="{StaticResource QuickCommandActionIconStyle}">
                                                                 <Setter Property="Symbol" Value="ChevronDown20" />
                                                                 <Style.Triggers>
                                                                     <DataTrigger Binding="{Binding IsExpanded}" Value="True">
@@ -1902,22 +2114,60 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
 
-                    <Grid x:Name="QuickCommandEditorHost"
+                        <Grid x:Name="QuickCommandEditorHost"
                           Grid.Row="3"
-                          Height="0"
+                          Margin="0,3,0,2"
+                              Height="0"
+                              MaxHeight="360"
                           Opacity="0"
                           Visibility="Collapsed"
                           ClipToBounds="True"
+                          Background="{DynamicResource QuickCommandEditorBrush}"
                           DataContext="{Binding SelectedQuickCommand}">
-                        <ScrollViewer Margin="0,9,0,0"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <Border Margin="0"
-                                    Padding="0"
-                                    Background="{DynamicResource PanelBackgroundBrush}"
-                                    BorderBrush="{DynamicResource DividerBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="4">
+                        <Border Margin="0"
+                                Background="{DynamicResource QuickCommandEditorBrush}"
+                                BorderBrush="{DynamicResource QuickCommandEditorBorderBrush}"
+                                BorderThickness="1,2,1,1"
+                                CornerRadius="7"
+                                Effect="{StaticResource QuickCommandEditorShadowEffect}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="34" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <Border Grid.Row="0"
+                                        Padding="9,0"
+                                        Background="{DynamicResource QuickCommandEditorHeaderBrush}"
+                                        BorderBrush="{DynamicResource QuickCommandEditorBorderBrush}"
+                                        BorderThickness="0,0,0,1">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock VerticalAlignment="Center"
+                                                   FontSize="12"
+                                                   FontWeight="SemiBold"
+                                                   Text="指令编辑" />
+                                        <TextBlock Grid.Column="1"
+                                                   Margin="9,0,0,0"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="11"
+                                                   Text="{Binding Name, StringFormat=当前：{0}}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </Grid>
+                                </Border>
+                                <ScrollViewer Grid.Row="1"
+                                              Margin="0"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <Border Margin="8,8,8,8"
+                                            Padding="0"
+                                            Background="{DynamicResource QuickCommandEditorSectionBrush}"
+                                            BorderBrush="{DynamicResource DividerBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="5">
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto" />
@@ -1959,9 +2209,9 @@
                                                 <ColumnDefinition Width="32" />
                                             </Grid.ColumnDefinitions>
                                             <TextBlock VerticalAlignment="Center" FontSize="10" Text="变量方案" />
-                                            <ListBox Grid.Column="1"
-                                                     Height="40"
-                                                     Margin="0,6,0,0"
+                                                     <ListBox Grid.Column="1"
+                                                      Height="44"
+                                                      Margin="0,2,0,0"
                                                      ItemsSource="{Binding VariableSets}"
                                                      SelectedItem="{Binding SelectedVariableSet, Mode=TwoWay}"
                                                      SelectionMode="Single"
@@ -1988,8 +2238,8 @@
                                                 <ListBox.ItemContainerStyle>
                                                     <Style TargetType="ListBoxItem">
                                                         <Setter Property="Height" Value="28" />
-                                                        <Setter Property="MinWidth" Value="76" />
-                                                        <Setter Property="Margin" Value="0,0,3,0" />
+                                                         <Setter Property="MinWidth" Value="64" />
+                                                         <Setter Property="Margin" Value="0,0,2,0" />
                                                         <Setter Property="Padding" Value="2,0" />
                                                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                                         <Setter Property="VerticalContentAlignment" Value="Stretch" />
@@ -2032,12 +2282,13 @@
                                                 </ListBox.ItemContainerStyle>
                                                 <ListBox.ItemTemplate>
                                                     <DataTemplate>
-                                                        <Grid MinWidth="68" Height="24">
-                                                            <TextBlock HorizontalAlignment="Center"
-                                                                       VerticalAlignment="Center"
-                                                                       FontSize="11"
-                                                                       Text="{Binding Name}"
-                                                                       ToolTip="单击选择方案，双击重命名">
+                                                         <Grid MinWidth="56" Height="24">
+                                                             <TextBlock HorizontalAlignment="Center"
+                                                                        VerticalAlignment="Center"
+                                                                        FontSize="11"
+                                                                        Text="{Binding Name}"
+                                                                        TextTrimming="CharacterEllipsis"
+                                                                        ToolTip="{Binding Name}">
                                                                 <TextBlock.Style>
                                                                     <Style TargetType="TextBlock">
                                                                         <Setter Property="Visibility" Value="Visible" />
@@ -2050,7 +2301,7 @@
                                                                 </TextBlock.Style>
                                                             </TextBlock>
                                                             <TextBox x:Name="QuickVariableSetNameTextBox"
-                                                                     MinWidth="68"
+                                                                      MinWidth="56"
                                                                      Height="24"
                                                                      Padding="4,1"
                                                                      HorizontalContentAlignment="Center"
@@ -2114,7 +2365,7 @@
                                                 <RowDefinition Height="24" />
                                                 <RowDefinition Height="Auto" />
                                             </Grid.RowDefinitions>
-                                                <Grid Background="{DynamicResource SidebarBackgroundBrush}">
+                                                <Grid Background="{DynamicResource QuickCommandEditorHeaderBrush}">
                                                     <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="1.1*" />
                                                     <ColumnDefinition Width="1.5*" />
@@ -2256,8 +2507,10 @@
                                             </Grid>
                                         </Border>
                                     </Grid>
-                            </Border>
-                        </ScrollViewer>
+                                    </Border>
+                                </ScrollViewer>
+                            </Grid>
+                        </Border>
 
                         <Button x:Name="QuickCommandEditorCollapseButton"
                                 Width="52"
@@ -2286,7 +2539,7 @@
                 BorderThickness="0,1,0,0">
             <DockPanel LastChildFill="True">
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Margin="10,0" FontSize="11" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding RateText}" />
+                    <TextBlock Margin="10,0" FontSize="11" Foreground="{DynamicResource ButtonForegroundBrush}" Text="{Binding RateText}" />
                     <TextBlock Margin="10,0" FontSize="11" Foreground="{DynamicResource ReceiveBrush}" Text="{Binding ReceivedBytes, StringFormat=RX {0:N0}}" />
                     <TextBlock Margin="10,0" FontSize="11" Foreground="{DynamicResource SendBrush}" Text="{Binding SentBytes, StringFormat=TX {0:N0}}" />
                 </StackPanel>

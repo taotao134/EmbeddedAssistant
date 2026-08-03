@@ -31,6 +31,11 @@
             <SolidColorBrush x:Key="ErrorBrush" Color="#DC2626" />
             <SolidColorBrush x:Key="ButtonSurfaceBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="ButtonForegroundBrush" Color="#0F172A" />
+            <SolidColorBrush x:Key="QuickCommandListCanvasBrush" Color="#F3F6FA" />
+            <SolidColorBrush x:Key="QuickCommandEditorBrush" Color="#E7EEF7" />
+            <SolidColorBrush x:Key="QuickCommandEditorHeaderBrush" Color="#DCE8F5" />
+            <SolidColorBrush x:Key="QuickCommandEditorBorderBrush" Color="#9FB4CE" />
+            <SolidColorBrush x:Key="QuickCommandEditorSectionBrush" Color="#FFFFFF" />
 
             <Style x:Key="RoundedButtonStyle" TargetType="Button">
                 <Setter Property="FocusVisualStyle" Value="{x:Null}" />
@@ -248,7 +253,7 @@
                                 <Trigger Property="IsSelected" Value="True">
                                     <Setter TargetName="TabBorder" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
                                     <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                    <Setter Property="FontWeight" Value="Normal" />
                                 </Trigger>
                                 <Trigger Property="IsEnabled" Value="False">
                                     <Setter TargetName="TabBorder" Property="Opacity" Value="0.45" />

@@ -25,10 +25,20 @@ namespace DeviceDebugStudio.App;
 
 public partial class MainWindow : FluentWindow
 {
-    private const double CommandPanelMinWidth = 480;
+    private const double MinimumLayoutBreakpoint = 1120;
+    private const double CompactLayoutBreakpoint = 1280;
+    private const double NormalWorkspaceMinWidth = 480;
+    private const double CompactWorkspaceMinWidth = 520;
+    private const double MinimumWorkspaceMinWidth = 560;
+    private const double NormalCommandPanelMinWidth = 480;
+    private const double CompactCommandPanelMinWidth = 440;
+    private const double MinimumCommandPanelMinWidth = 420;
     private const double CommandPanelMaxWidth = 620;
-    private const double DevicePanelMinWidth = 150;
-    private const double WorkspaceMinWidth = 480;
+    private const double NormalDevicePanelMinWidth = 150;
+    private const double MinimumDevicePanelMinWidth = 160;
+    private const double NormalDevicePanelWidth = 232;
+    private const double CompactDevicePanelWidth = 190;
+    private const double MinimumDevicePanelWidth = 170;
     private const double SplitterWidth = 5;
     private const double TerminalTimeColumnMinWidth = 60;
     private const double TerminalDirectionColumnMinWidth = 84;
@@ -44,6 +54,8 @@ public partial class MainWindow : FluentWindow
     private static readonly Duration QuickCommandEditorTransitionDuration = new(TimeSpan.FromMilliseconds(150));
     private static readonly Duration ThemeWipeDuration = new(TimeSpan.FromMilliseconds(260));
     private static readonly Duration ThemeRevealDuration = new(TimeSpan.FromMilliseconds(100));
+    private const double QuickCommandEditorMinHeight = 210;
+    private const double QuickCommandEditorMaxHeight = 360;
 
     private readonly MainWindowViewModel _viewModel;
     private readonly DataLogger _chartLogger;
@@ -77,6 +89,26 @@ public partial class MainWindow : FluentWindow
     private ComboBox? _comboBoxPendingOpen;
     private ComboBox? _openComboBox;
     private bool _themeTransitionActive;
+    private bool _isCompactLayout;
+    private bool _isMinimumLayout;
+
+    private double CurrentCommandPanelMinWidth =>
+        _isMinimumLayout
+            ? MinimumCommandPanelMinWidth
+            : _isCompactLayout ? CompactCommandPanelMinWidth : NormalCommandPanelMinWidth;
+
+    private double CurrentWorkspaceMinWidth =>
+        _isMinimumLayout
+            ? MinimumWorkspaceMinWidth
+            : _isCompactLayout ? CompactWorkspaceMinWidth : NormalWorkspaceMinWidth;
+
+    private double CurrentDevicePanelMaxWidth =>
+        _isMinimumLayout
+            ? MinimumDevicePanelWidth
+            : _isCompactLayout ? CompactDevicePanelWidth : double.PositiveInfinity;
+
+    private double CurrentDevicePanelMinWidth =>
+        _isMinimumLayout ? MinimumDevicePanelMinWidth : NormalDevicePanelMinWidth;
 
     private enum SidebarFocus
     {
@@ -1248,10 +1280,43 @@ public partial class MainWindow : FluentWindow
 
     private double GetQuickCommandEditorTargetHeight()
     {
+        double availableWidth = QuickCommandEditorHost.ActualWidth;
+        if (!(availableWidth > 0) || !double.IsFinite(availableWidth))
+        {
+            availableWidth = CommandPanelBorder.ActualWidth - 16;
+        }
+
+        availableWidth = Math.Max(0, availableWidth);
+        Visibility previousVisibility = QuickCommandEditorHost.Visibility;
+        double previousHeight = QuickCommandEditorHost.Height;
+
+        // 临时解除折叠和固定高度，让 WPF 按编辑内容测量自然高度。
+        QuickCommandEditorHost.Visibility = Visibility.Visible;
+        QuickCommandEditorHost.Height = double.NaN;
+        QuickCommandEditorHost.Measure(new Size(availableWidth, double.PositiveInfinity));
+        double measuredHeight = QuickCommandEditorHost.DesiredSize.Height;
+
+        QuickCommandEditorHost.Height = previousHeight;
+        QuickCommandEditorHost.Visibility = previousVisibility;
+
+        double maximumHeight = QuickCommandEditorMaxHeight;
         double panelHeight = CommandPanelBorder.ActualHeight;
-        return panelHeight > 0 && double.IsFinite(panelHeight)
-            ? Math.Clamp(panelHeight * 0.44, 230, 350)
-            : 300;
+        if (panelHeight > 0 && double.IsFinite(panelHeight))
+        {
+            maximumHeight = Math.Min(
+                maximumHeight,
+                Math.Max(QuickCommandEditorMinHeight, panelHeight - 96));
+        }
+
+        if (!(measuredHeight > 0) || !double.IsFinite(measuredHeight))
+        {
+            measuredHeight = 280;
+        }
+
+        return Math.Clamp(
+            Math.Ceiling(measuredHeight),
+            QuickCommandEditorMinHeight,
+            maximumHeight);
     }
 
     private static TextBox? FindNamedTextBox(DependencyObject parent, string name)
@@ -1344,6 +1409,8 @@ public partial class MainWindow : FluentWindow
     private void OnMainWindowLoaded(object sender, RoutedEventArgs e)
     {
         Loaded -= OnMainWindowLoaded;
+        UpdateResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width);
+        EnforcePanelLayout();
         _ = Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(PrewarmBaudRateComboBox));
     }
 
@@ -2252,7 +2319,12 @@ public partial class MainWindow : FluentWindow
         }
         else
         {
-            _commandDesiredOpen = !_commandDesiredOpen;
+            bool opening = !_commandDesiredOpen;
+            _commandDesiredOpen = opening;
+            if (opening && ShouldFocusCommandPanel())
+            {
+                _sidebarFocus = SidebarFocus.Command;
+            }
         }
 
         EnforcePanelLayout();
@@ -2277,28 +2349,33 @@ public partial class MainWindow : FluentWindow
         }
         else
         {
-            _deviceDesiredOpen = !_deviceDesiredOpen;
+            bool opening = !_deviceDesiredOpen;
+            _deviceDesiredOpen = opening;
+            if (opening && ShouldFocusDevicePanel())
+            {
+                _sidebarFocus = SidebarFocus.Device;
+            }
         }
 
         EnforcePanelLayout();
     }
 
     private bool CanDockCommandPanel(double totalWidth) =>
-        totalWidth >= WorkspaceMinWidth + CommandPanelMinWidth + SplitterWidth;
+        totalWidth >= CurrentWorkspaceMinWidth + CurrentCommandPanelMinWidth + SplitterWidth;
 
     private bool CanDockDevicePanel(double totalWidth) =>
-        totalWidth >= WorkspaceMinWidth + DevicePanelMinWidth + SplitterWidth;
+        totalWidth >= CurrentWorkspaceMinWidth + CurrentDevicePanelMinWidth + SplitterWidth;
 
     private bool CanDockDesiredPanels(double totalWidth)
     {
-        double required = WorkspaceMinWidth;
+        double required = CurrentWorkspaceMinWidth;
         if (_deviceDesiredOpen)
         {
-            required += DevicePanelMinWidth + SplitterWidth;
+            required += CurrentDevicePanelMinWidth + SplitterWidth;
         }
         if (_commandDesiredOpen)
         {
-            required += CommandPanelMinWidth + SplitterWidth;
+            required += CurrentCommandPanelMinWidth + SplitterWidth;
         }
         return totalWidth >= required;
     }
@@ -2317,6 +2394,125 @@ public partial class MainWindow : FluentWindow
             || _commandDesiredOpen && !CanDockDesiredPanels(totalWidth);
     }
 
+    private void UpdateResponsiveLayout(double totalWidth)
+    {
+        bool minimum = totalWidth > 0 && totalWidth < MinimumLayoutBreakpoint;
+        bool compact = totalWidth > 0 && totalWidth < CompactLayoutBreakpoint;
+        _isMinimumLayout = minimum;
+        _isCompactLayout = compact;
+        Tag = compact ? "Compact" : "Normal";
+
+        if (TerminalSearchColumn is null
+            || TerminalSearchBorder is null
+            || TerminalSearchTextBox is null
+            || TerminalSearchIcon is null
+            || TerminalToolsPanel is null)
+        {
+            return;
+        }
+
+        bool stackedToolbar = compact;
+        double searchWidth = stackedToolbar ? double.NaN : 260;
+        TerminalSearchColumn.Width = stackedToolbar
+            ? new GridLength(1, GridUnitType.Star)
+            : new GridLength(searchWidth);
+        TerminalSearchBorder.Width = searchWidth;
+        TerminalSearchBorder.HorizontalAlignment = stackedToolbar
+            ? HorizontalAlignment.Stretch
+            : HorizontalAlignment.Left;
+        TerminalSearchBorder.Height = compact ? 28 : 30;
+        TerminalSearchTextBox.Height = compact ? 26 : 28;
+        TerminalSearchTextBox.FontSize = compact ? 11 : 13;
+        TerminalSearchIcon.Width = compact ? 14 : 16;
+        TerminalSearchIcon.Height = compact ? 14 : 16;
+        TerminalToolsPanel.Margin = compact
+            ? new Thickness(6, 0, 0, 0)
+            : new Thickness(10, 0, 0, 0);
+
+        if (ConnectionHeaderGrid is not null
+            && ConnectionParametersScrollViewer is not null
+            && ConnectionActionsPanel is not null)
+        {
+            ConnectionHeaderGrid.RowDefinitions.Clear();
+            ConnectionHeaderGrid.ColumnDefinitions.Clear();
+            if (compact)
+            {
+                ConnectionHeaderGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                ConnectionHeaderGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                ConnectionHeaderGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                Grid.SetRow(ConnectionParametersScrollViewer, 0);
+                Grid.SetColumn(ConnectionParametersScrollViewer, 0);
+                Grid.SetRow(ConnectionActionsPanel, 1);
+                Grid.SetColumn(ConnectionActionsPanel, 0);
+                ConnectionActionsPanel.HorizontalAlignment = HorizontalAlignment.Right;
+                ConnectionActionsPanel.Margin = new Thickness(0, 2, 0, 0);
+                ConnectionHeaderGrid.MinHeight = 78;
+                ConnectionParametersScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+                ConnectionParametersScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            }
+            else
+            {
+                ConnectionHeaderGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                ConnectionHeaderGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                ConnectionHeaderGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                Grid.SetRow(ConnectionParametersScrollViewer, 0);
+                Grid.SetColumn(ConnectionParametersScrollViewer, 0);
+                Grid.SetRow(ConnectionActionsPanel, 0);
+                Grid.SetColumn(ConnectionActionsPanel, 1);
+                ConnectionActionsPanel.HorizontalAlignment = HorizontalAlignment.Right;
+                ConnectionActionsPanel.Margin = new Thickness(10, 0, 0, 0);
+                ConnectionHeaderGrid.MinHeight = 52;
+                ConnectionParametersScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+                ConnectionParametersScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            }
+        }
+
+        if (TerminalToolbarGrid is null)
+        {
+            return;
+        }
+
+        TerminalToolbarGrid.RowDefinitions.Clear();
+        TerminalToolbarGrid.ColumnDefinitions.Clear();
+        if (stackedToolbar)
+        {
+            TerminalToolbarGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            TerminalToolbarGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            TerminalToolbarGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Grid.SetRow(TerminalSearchBorder, 0);
+            Grid.SetColumn(TerminalSearchBorder, 0);
+            Grid.SetRow(TerminalToolsPanel, 1);
+            Grid.SetColumn(TerminalToolsPanel, 0);
+        }
+        else
+        {
+            TerminalToolbarGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            TerminalToolbarGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(260) });
+            TerminalToolbarGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Grid.SetRow(TerminalSearchBorder, 0);
+            Grid.SetColumn(TerminalSearchBorder, 0);
+            Grid.SetRow(TerminalToolsPanel, 0);
+            Grid.SetColumn(TerminalToolsPanel, 1);
+        }
+    }
+
+    private double GetCommandPanelMaxWidth(double totalWidth)
+    {
+        double modeMax = _isMinimumLayout
+            ? MinimumCommandPanelMinWidth
+            : _isCompactLayout ? 460 : CommandPanelMaxWidth;
+        double availableMax = totalWidth - CurrentWorkspaceMinWidth - SplitterWidth;
+        return Math.Max(
+            CurrentCommandPanelMinWidth,
+            Math.Min(modeMax, availableMax));
+    }
+
+    private double ClampCommandPanelWidth(double requestedWidth, double totalWidth) =>
+        Math.Clamp(
+            requestedWidth,
+            CurrentCommandPanelMinWidth,
+            GetCommandPanelMaxWidth(totalWidth));
+
     private void OnWindowSizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (DevicePanelColumn is null || CommandPanelColumn is null)
@@ -2324,6 +2520,7 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
+        UpdateResponsiveLayout(e.NewSize.Width);
         CloseOpenComboBox();
         EnforcePanelLayout();
         if (_quickCommandEditorExpanded && QuickCommandEditorHost is not null)
@@ -2360,7 +2557,7 @@ public partial class MainWindow : FluentWindow
         if (CommandPanelColumn.Width.Value >= 10)
         {
             _commandPanelExpandedWidth = new GridLength(
-                Math.Clamp(CommandPanelColumn.Width.Value, CommandPanelMinWidth, CommandPanelMaxWidth));
+                ClampCommandPanelWidth(CommandPanelColumn.Width.Value, ActualWidth));
         }
 
         EnforcePanelLayout();
@@ -2412,26 +2609,30 @@ public partial class MainWindow : FluentWindow
         {
             commandWidth = Math.Clamp(
                 _commandPanelExpandedWidth.Value,
-                CommandPanelMinWidth,
-                CommandPanelMaxWidth);
+                CurrentCommandPanelMinWidth,
+                GetCommandPanelMaxWidth(totalWidth));
         }
         else if (_sidebarFocus == SidebarFocus.Device)
         {
-            deviceWidth = Math.Max(_devicePanelExpandedWidth.Value, DevicePanelMinWidth);
+            deviceWidth = Math.Min(
+                Math.Max(_devicePanelExpandedWidth.Value, CurrentDevicePanelMinWidth),
+                CurrentDevicePanelMaxWidth);
         }
         else
         {
             commandWidth = _commandDesiredOpen && CanDockCommandPanel(totalWidth)
-                ? Math.Clamp(_commandPanelExpandedWidth.Value, CommandPanelMinWidth, CommandPanelMaxWidth)
+                ? ClampCommandPanelWidth(_commandPanelExpandedWidth.Value, totalWidth)
                 : 0;
-            double occupied = WorkspaceMinWidth + (commandWidth > 0 ? commandWidth + SplitterWidth : 0);
-            deviceWidth = _deviceDesiredOpen && totalWidth >= occupied + DevicePanelMinWidth + SplitterWidth
-                ? Math.Max(_devicePanelExpandedWidth.Value, DevicePanelMinWidth)
+            double occupied = CurrentWorkspaceMinWidth + (commandWidth > 0 ? commandWidth + SplitterWidth : 0);
+            deviceWidth = _deviceDesiredOpen && totalWidth >= occupied + CurrentDevicePanelMinWidth + SplitterWidth
+                ? Math.Min(
+                    Math.Max(_devicePanelExpandedWidth.Value, CurrentDevicePanelMinWidth),
+                    Math.Min(CurrentDevicePanelMaxWidth, totalWidth - occupied - SplitterWidth))
                 : 0;
         }
 
         WorkspaceColumn.MinWidth = showWorkspace && _sidebarFocus == SidebarFocus.None
-            ? WorkspaceMinWidth
+            ? CurrentWorkspaceMinWidth
             : 0;
         WorkspaceColumn.Width = showWorkspace ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
         ApplyDevicePanel(deviceWidth);
@@ -2440,9 +2641,9 @@ public partial class MainWindow : FluentWindow
 
     private void ApplyDevicePanel(double width)
     {
-        if (width >= DevicePanelMinWidth)
+        if (width >= CurrentDevicePanelMinWidth)
         {
-            DevicePanelColumn.MinWidth = DevicePanelMinWidth;
+            DevicePanelColumn.MinWidth = CurrentDevicePanelMinWidth;
             DevicePanelColumn.Width = new GridLength(width);
             DeviceSplitterColumn.Width = new GridLength(SplitterWidth);
             return;
@@ -2453,9 +2654,9 @@ public partial class MainWindow : FluentWindow
 
     private void ApplyCommandPanel(double width)
     {
-        if (width >= CommandPanelMinWidth)
+        if (width >= CurrentCommandPanelMinWidth)
         {
-            CommandPanelColumn.MinWidth = CommandPanelMinWidth;
+            CommandPanelColumn.MinWidth = CurrentCommandPanelMinWidth;
             CommandPanelColumn.Width = new GridLength(width);
             CommandSplitterColumn.Width = new GridLength(SplitterWidth);
             return;

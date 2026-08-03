@@ -283,9 +283,9 @@ public partial class App : Application
         Current.Resources["PanelBackgroundBrush"] = new System.Windows.Media.SolidColorBrush(
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#111827" : "#FFFFFF"));
         Current.Resources["SidebarBackgroundBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#172033" : "#F8FAFC"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#172033" : "#E7EDF4"));
         Current.Resources["DividerBrush"] = new System.Windows.Media.SolidColorBrush(
-            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#28354A" : "#E2E8F0"));
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#28354A" : "#CBD5E1"));
         Current.Resources["MutedTextBrush"] = new System.Windows.Media.SolidColorBrush(
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#94A3B8" : "#64748B"));
         Current.Resources["AccentSubtleBrush"] = new System.Windows.Media.SolidColorBrush(
@@ -300,6 +300,16 @@ public partial class App : Application
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#162033" : "#FFFFFF"));
         Current.Resources["ButtonForegroundBrush"] = new System.Windows.Media.SolidColorBrush(
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#E5E7EB" : "#0F172A"));
+        Current.Resources["QuickCommandListCanvasBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#131B2A" : "#F3F6FA"));
+        Current.Resources["QuickCommandEditorBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#1B283D" : "#E7EEF7"));
+        Current.Resources["QuickCommandEditorHeaderBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#223653" : "#DCE8F5"));
+        Current.Resources["QuickCommandEditorBorderBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#3E5C83" : "#9FB4CE"));
+        Current.Resources["QuickCommandEditorSectionBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#162033" : "#FFFFFF"));
 
         foreach (Window window in Current.Windows.OfType<Window>())
         {
