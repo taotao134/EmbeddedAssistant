@@ -8,14 +8,17 @@ namespace DeviceDebugStudio.Infrastructure.Persistence;
 
 public sealed partial class SqliteCaptureStore(string? captureDirectory = null) : ICaptureStore
 {
+    private const int CaptureQueueCapacity = 32_768;
     private readonly string _captureDirectory = captureDirectory ?? AppPaths.CaptureDirectory;
     private Channel<TransportPacket>? _channel;
     private Task? _writerTask;
     private string? _sessionName;
     private TransportKind _transportKind;
     private int _started;
+    private long _droppedPacketCount;
 
     public string? FilePath { get; private set; }
+    public long DroppedPacketCount => Interlocked.Read(ref _droppedPacketCount);
 
     public Task StartAsync(string sessionName, TransportKind transportKind, CancellationToken cancellationToken = default)
     {
@@ -25,6 +28,7 @@ public sealed partial class SqliteCaptureStore(string? captureDirectory = null) 
         }
 
         Directory.CreateDirectory(_captureDirectory);
+        Interlocked.Exchange(ref _droppedPacketCount, 0);
         _sessionName = sessionName;
         _transportKind = transportKind;
         string safeName = InvalidFileNameRegex().Replace(sessionName, "_").Trim(' ', '.');
@@ -34,8 +38,9 @@ public sealed partial class SqliteCaptureStore(string? captureDirectory = null) 
         }
 
         FilePath = Path.Combine(_captureDirectory, $"{DateTime.Now:yyyyMMdd_HHmmss}_{safeName}.db");
-        _channel = Channel.CreateUnbounded<TransportPacket>(new UnboundedChannelOptions
+        _channel = Channel.CreateBounded<TransportPacket>(new BoundedChannelOptions(CaptureQueueCapacity)
         {
+            FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
             SingleWriter = false
         });
@@ -45,8 +50,14 @@ public sealed partial class SqliteCaptureStore(string? captureDirectory = null) 
 
     public ValueTask AppendAsync(TransportPacket packet, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Channel<TransportPacket> channel = _channel ?? throw new InvalidOperationException("捕获存储尚未启动。 ");
-        return channel.Writer.WriteAsync(packet, cancellationToken);
+        if (!channel.Writer.TryWrite(packet))
+        {
+            Interlocked.Increment(ref _droppedPacketCount);
+        }
+
+        return ValueTask.CompletedTask;
     }
 
     public async Task CompleteAsync(CancellationToken cancellationToken = default)

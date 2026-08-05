@@ -915,7 +915,7 @@
                                                          Style="{StaticResource TerminalPlainTextBoxStyle}"
                                                          FontSize="{Binding TerminalFontSize}">
                                                 <RichTextBox.Document>
-                                                    <FlowDocument PagePadding="0" PageWidth="100000" ColumnWidth="100000">
+                                                    <FlowDocument PagePadding="0">
                                                         <Paragraph Margin="0" />
                                                     </FlowDocument>
                                                 </RichTextBox.Document>
@@ -2020,31 +2020,35 @@
                                                           ItemsSource="{Binding DataContext.ChecksumKinds, RelativeSource={RelativeSource AncestorType=Window}}"
                                                           SelectedItem="{Binding Checksum}"
                                                           ToolTip="自动追加校验" />
-                                                  <Grid Grid.Column="4"
-                                                        Width="72"
-                                                        Height="26"
-                                                        Margin="1,0"
-                                                        HorizontalAlignment="Left">
-                                                    <TextBox Style="{StaticResource ConnectionTextBoxStyle}"
-                                                             MinWidth="0"
+                                                  <StackPanel Grid.Column="4"
+                                                              Height="26"
+                                                              Margin="1,0"
+                                                              HorizontalAlignment="Left"
+                                                              VerticalAlignment="Center"
+                                                              Orientation="Horizontal">
+                                                    <TextBox Width="50"
                                                              Height="26"
                                                              MinHeight="0"
-                                                             Padding="2,1,18,1"
+                                                             Padding="0"
                                                              FontSize="10"
                                                              HorizontalContentAlignment="Center"
-                                                             Text="{Binding RepeatIntervalMs}"
-                                                             ToolTip="循环发送间隔" />
-                                                    <TextBlock Margin="0,0,3,0"
-                                                               HorizontalAlignment="Right"
+                                                             VerticalContentAlignment="Center"
+                                                             TextAlignment="Center"
+                                                             MaxLength="5"
+                                                             Validation.ErrorTemplate="{x:Null}"
+                                                             Text="{Binding RepeatIntervalText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                             LostKeyboardFocus="OnQuickCommandRepeatIntervalLostKeyboardFocus"
+                                                             ToolTip="快捷指令循环发送间隔，范围 10~60000 ms" />
+                                                    <TextBlock Margin="4,0,6,0"
+                                                               HorizontalAlignment="Left"
                                                                VerticalAlignment="Center"
                                                                FontSize="10"
                                                                Foreground="{DynamicResource MutedTextBrush}"
-                                                               IsHitTestVisible="False"
                                                                Text="ms" />
-                                                </Grid>
+                                                </StackPanel>
                                                   <Button Grid.Column="5"
                                                          Style="{StaticResource QuickCommandActionButtonStyle}"
-                                                        ToolTip="开始或停止循环发送"
+                                                        ToolTip="开始或停止快捷指令循环发送"
                                                         ToolTipService.ShowOnDisabled="True"
                                                         ToolTipService.InitialShowDelay="200"
                                                         ToolTipService.ShowDuration="5000"
@@ -2482,8 +2486,12 @@
                                             <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="68" />
+                                                <ColumnDefinition Width="220" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="82" />
                                             </Grid.ColumnDefinitions>
                                             <TextBlock VerticalAlignment="Center" FontSize="11" Text="发送预览" />
                                             <TextBox Grid.Column="1"
@@ -2495,7 +2503,8 @@
                                             <Button Grid.Column="2"
                                                     Width="32"
                                                     Height="28"
-                                                    Margin="6,0,0,0"
+                                                    Margin="4,0,0,0"
+                                                    HorizontalAlignment="Left"
                                                     Style="{StaticResource PrimaryButtonStyle}"
                                                     MinWidth="0"
                                                     Padding="0"
@@ -2504,6 +2513,56 @@
                                                     CommandParameter="{Binding}">
                                                 <ui:SymbolIcon Symbol="Send20" Width="14" Height="14" />
                                             </Button>
+                                            <Button Grid.Column="3"
+                                                    Width="32"
+                                                    Height="28"
+                                                    Margin="2,0,0,0"
+                                                    HorizontalAlignment="Left"
+                                                    Style="{StaticResource QuickCommandActionButtonStyle}"
+                                                    MinWidth="0"
+                                                    MinHeight="0"
+                                                    Padding="0"
+                                                    ToolTip="开始或停止快捷参数循环发送"
+                                                    ToolTipService.ShowOnDisabled="True"
+                                                    ToolTipService.InitialShowDelay="200"
+                                                    ToolTipService.ShowDuration="5000"
+                                                    Command="{Binding DataContext.ToggleQuickParameterRepeatCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}">
+                                                <ui:SymbolIcon>
+                                                    <ui:SymbolIcon.Style>
+                                                        <Style TargetType="ui:SymbolIcon" BasedOn="{StaticResource QuickCommandActionIconStyle}">
+                                                            <Setter Property="Symbol" Value="ArrowRepeatAll20" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsParameterRepeating}" Value="True">
+                                                                    <Setter Property="Symbol" Value="Pause20" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </ui:SymbolIcon.Style>
+                                                </ui:SymbolIcon>
+                                            </Button>
+                                            <TextBox Grid.Column="4"
+                                                     Width="50"
+                                                     Height="26"
+                                                     MinHeight="0"
+                                                     Margin="0"
+                                                     Padding="0"
+                                                     FontSize="10"
+                                                     HorizontalContentAlignment="Center"
+                                                     VerticalContentAlignment="Center"
+                                                     TextAlignment="Center"
+                                                     MaxLength="5"
+                                                     Validation.ErrorTemplate="{x:Null}"
+                                                     Text="{Binding ParameterRepeatIntervalText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                     LostKeyboardFocus="OnQuickParameterRepeatIntervalLostKeyboardFocus"
+                                                     ToolTip="快捷参数循环发送间隔，范围 10~60000 ms" />
+                                            <TextBlock Grid.Column="5"
+                                                       Margin="4,0,6,0"
+                                                       HorizontalAlignment="Left"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="10"
+                                                       Foreground="{DynamicResource MutedTextBrush}"
+                                                       Text="ms" />
                                             </Grid>
                                         </Border>
                                     </Grid>

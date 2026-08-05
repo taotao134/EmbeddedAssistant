@@ -39,6 +39,13 @@ public sealed record FramingModeOption(FramingMode Mode, string Name, string Des
 public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
     private const int MaximumTransportDiagnosticEventsPerSecond = 64;
+    private const int MaximumPendingTerminalPackets = 16_384;
+    private const int MaximumPendingChartValues = 4096;
+    private const int MaximumPendingFrames = 8192;
+    private const int ChartValuesPerUiTick = 200;
+    private const int TerminalEvictionBatchSize = 1000;
+    private const int FrameEvictionBatchSize = 500;
+    private const int FrameRecordLimit = 20_000;
     private static readonly IReadOnlyDictionary<string, string> EmptyVariables =
         new Dictionary<string, string>();
 
@@ -57,6 +64,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly ConcurrentQueue<double> _pendingChartValues = new();
     private readonly object _transportDiagnosticLogLock = new();
     private readonly Dictionary<Guid, CancellationTokenSource> _repeatCommands = [];
+    private readonly Dictionary<Guid, CancellationTokenSource> _parameterRepeatCommands = [];
     private readonly Dictionary<QuickCommandCategory, List<QuickCommandItemViewModel>> _quickCommandsByCategory = [];
     private CancellationTokenSource? _sendRepeatCancellation;
     private readonly object _decoderSync = new();
@@ -64,7 +72,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly DispatcherTimer _uiTimer;
     private readonly DispatcherTimer _profileSaveTimer;
     private readonly DispatcherTimer _appSettingsSaveTimer;
-    private readonly DispatcherTimer _connectionConfigurationTimer;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ModbusSlaveSimulator _modbusSlave = new();
     private CommunicationSession? _session;
@@ -81,11 +88,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private DateTimeOffset _nextPortRefresh = DateTimeOffset.Now.AddSeconds(2);
     private int _portRefreshRunning;
     private int _connectionWorkerRunning;
-    private int _connectionConfigurationRevision;
-    private int _connectedConfigurationRevision;
     private int _transportDiagnosticEventCount;
     private bool _transportDiagnosticSuppressionLogged;
     private long _lastDisplayDropCount;
+    private long _terminalPacketDropCount;
+    private long _chartValueDropCount;
+    private long _frameDropCount;
+    private long _lastTerminalDropLogCount;
+    private long _lastChartDropLogCount;
+    private long _lastFrameDropLogCount;
+    private DateTimeOffset _lastQueueSampleTimestamp = DateTimeOffset.MinValue;
     private bool _manualDisconnect;
     private bool _connectionDesired;
     private bool _connectionRetryPending;
@@ -179,12 +191,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _lastAppSettingsSaveTask = SaveAppSettingsAsync();
             await _lastAppSettingsSaveTask.ConfigureAwait(true);
         };
-        _connectionConfigurationTimer = new DispatcherTimer(DispatcherPriority.Background)
-        {
-            Interval = TimeSpan.FromMilliseconds(250)
-        };
-        _connectionConfigurationTimer.Tick += OnConnectionConfigurationTimerTick;
-
         QuickCommandsView = CollectionViewSource.GetDefaultView(QuickCommands);
         QuickCommandsView.Filter = FilterQuickCommand;
         QuickCommands.CollectionChanged += OnQuickCommandsCollectionChanged;
@@ -1076,7 +1082,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _manualDisconnect = !_connectionDesired;
         if (!_connectionDesired)
         {
-            _connectionConfigurationTimer.Stop();
             SendRepeatEnabled = false;
             StopSendRepeat();
             _connectionAttemptCancellation?.Cancel();
@@ -1096,6 +1101,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.TemplateOrPayload);
 
     private bool CanToggleQuickRepeat(QuickCommandItemViewModel? command) =>
+        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.TemplateOrPayload);
+
+    private bool CanToggleQuickParameterRepeat(QuickCommandItemViewModel? command) =>
         CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.TemplateOrPayload);
 
     [RelayCommand(CanExecute = nameof(CanSend))]
@@ -1322,6 +1330,75 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             {
                 _repeatCommands.Remove(command.Id);
                 command.IsRepeating = false;
+            }
+            source.Dispose();
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanToggleQuickParameterRepeat), AllowConcurrentExecutions = true)]
+    private async Task ToggleQuickParameterRepeatAsync(QuickCommandItemViewModel? command)
+    {
+        if (command is null)
+        {
+            return;
+        }
+
+        if (_parameterRepeatCommands.Remove(command.Id, out CancellationTokenSource? existing))
+        {
+            CancelWithoutThrow(existing);
+            command.IsParameterRepeating = false;
+            return;
+        }
+
+        CancellationTokenSource source = new();
+        CancellationToken cancellationToken = source.Token;
+        try
+        {
+            CommunicationSession session = _session ?? throw new InvalidOperationException("请先建立连接。 ");
+            (bool isHex, Encoding encoding, _) = ResolveQuickCommandDataFormat(command);
+            byte[] data = BuildSendPayload(
+                command.ResolvedPayload,
+                isHex,
+                command.LineEnding,
+                command.Checksum,
+                command.ChecksumLittleEndian,
+                encoding);
+            if (data.Length == 0)
+            {
+                throw new InvalidOperationException("发送内容为空。 ");
+            }
+
+            int interval = Math.Clamp(command.ParameterRepeatIntervalMs, 10, 60_000);
+            _parameterRepeatCommands[command.Id] = source;
+            command.IsParameterRepeating = true;
+            command.RegisterUse();
+            ScheduleProfileSave();
+            Log.Information(
+                "启动快捷参数高性能循环发送 | 名称={Name} | 端点={Endpoint} | 间隔={Interval}ms | 字节={ByteCount}",
+                command.Name,
+                session.Transport.DisplayName,
+                interval,
+                data.Length);
+            await HighResolutionPeriodicTask.RunAsync(
+                TimeSpan.FromMilliseconds(interval),
+                token => SendPreparedRepeatIterationAsync(session, data, isHex, token),
+                cancellationToken).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception) when (exception is FormatException or InvalidOperationException or IOException or ArgumentException)
+        {
+            StatusText = $"快捷参数循环发送失败：{exception.Message}";
+            Log.Error(exception, "快捷参数高性能循环发送失败 | 名称={Name}", command.Name);
+        }
+        finally
+        {
+            if (_parameterRepeatCommands.TryGetValue(command.Id, out CancellationTokenSource? current)
+                && ReferenceEquals(current, source))
+            {
+                _parameterRepeatCommands.Remove(command.Id);
+                command.IsParameterRepeating = false;
             }
             source.Dispose();
         }
@@ -1559,11 +1636,26 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private void StopQuickCommandRepeat(QuickCommandItemViewModel command)
     {
+        StopQuickCommandMainRepeat(command);
+        StopQuickParameterRepeat(command);
+    }
+
+    private void StopQuickCommandMainRepeat(QuickCommandItemViewModel command)
+    {
         if (_repeatCommands.Remove(command.Id, out CancellationTokenSource? source))
         {
             CancelWithoutThrow(source);
         }
         command.IsRepeating = false;
+    }
+
+    private void StopQuickParameterRepeat(QuickCommandItemViewModel command)
+    {
+        if (_parameterRepeatCommands.Remove(command.Id, out CancellationTokenSource? source))
+        {
+            CancelWithoutThrow(source);
+        }
+        command.IsParameterRepeating = false;
     }
 
     private static void CancelWithoutThrow(CancellationTokenSource source)
@@ -1610,19 +1702,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         => command.SelectedVariableSet?.GetValues() ?? EmptyVariables;
 
     private static IReadOnlyList<string> GetCommandVariableNames(string payload)
-    {
-        List<string> names = [];
-        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
-        foreach (Match match in Regex.Matches(payload, @"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"))
-        {
-            string name = match.Groups[1].Value;
-            if (seen.Add(name))
-            {
-                names.Add(name);
-            }
-        }
-        return names;
-    }
+        => ByteText.GetVariableNames(payload);
 
     [RelayCommand]
     private void ClearTerminal()
@@ -1772,10 +1852,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _uiTimer.Stop();
         _profileSaveTimer.Stop();
         _appSettingsSaveTimer.Stop();
-        _connectionConfigurationTimer.Stop();
         StopSendRepeat();
-        CancellationTokenSource[] repeatSources = _repeatCommands.Values.ToArray();
+        CancellationTokenSource[] repeatSources = _repeatCommands.Values
+            .Concat(_parameterRepeatCommands.Values)
+            .ToArray();
         _repeatCommands.Clear();
+        _parameterRepeatCommands.Clear();
         foreach (CancellationTokenSource source in repeatSources)
         {
             CancelWithoutThrow(source);
@@ -1806,6 +1888,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (_activeProfile is not null && _activeProfile.Id != value.Id)
         {
+            RequireManualReconnectAfterConfigurationChange();
             _pendingTerminal.Clear();
             _serialTerminalBuffer.Clear();
             _terminalWaveSeparatorTracker.Reset();
@@ -2180,14 +2263,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _terminalWaveSeparatorTracker.Reset();
         TerminalRecords.Clear();
         FrameRecords.Clear();
-        if (_connectedWorkspaceMode is not null && _connectedWorkspaceMode != value.Mode)
+        if (_connectedWorkspaceMode != value.Mode
+            && (_connectionDesired
+                || IsConnected
+                || _session is not null
+                || _connectionAttemptCancellation is not null))
         {
-            _connectionDesired = false;
-            _manualDisconnect = true;
-            _connectionConfigurationTimer.Stop();
-            _connectionAttemptCancellation?.Cancel();
-            OnPropertyChanged(nameof(ConnectionButtonText));
-            EnsureConnectionStateWorker();
+            RequireManualReconnectAfterConfigurationChange();
         }
         UpdateAvailableTransportOptions();
         SelectedWorkspaceTabIndex = value.Mode switch
@@ -2225,7 +2307,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(ConnectionSummary));
         OnPropertyChanged(nameof(TerminalTabHeader));
         ScheduleProfileSave();
-        ScheduleConnectionConfigurationApply();
+        RequireManualReconnectAfterConfigurationChange();
     }
 
     partial void OnSelectedFramingModeChanged(FramingMode value) =>
@@ -2452,6 +2534,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             SendCommand.NotifyCanExecuteChanged();
             SendQuickCommandCommand.NotifyCanExecuteChanged();
             ToggleQuickRepeatCommand.NotifyCanExecuteChanged();
+            ToggleQuickParameterRepeatCommand.NotifyCanExecuteChanged();
         }));
     }
 
@@ -2479,29 +2562,26 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         OnPropertyChanged(nameof(ConnectionSummary));
         ScheduleProfileSave();
-        ScheduleConnectionConfigurationApply();
+        RequireManualReconnectAfterConfigurationChange();
     }
 
-    private void ScheduleConnectionConfigurationApply()
+    private void RequireManualReconnectAfterConfigurationChange()
     {
-        if (_connectionDesired && Volatile.Read(ref _disposed) == 0)
-        {
-            _connectionConfigurationTimer.Stop();
-            _connectionConfigurationTimer.Start();
-        }
-    }
-
-    private void OnConnectionConfigurationTimerTick(object? sender, EventArgs args)
-    {
-        _connectionConfigurationTimer.Stop();
-        if (!_connectionDesired || Volatile.Read(ref _disposed) != 0)
+        bool connectionActive = _connectionDesired
+            || IsConnected
+            || _session is not null
+            || _connectionAttemptCancellation is not null;
+        if (!connectionActive || Volatile.Read(ref _disposed) != 0)
         {
             return;
         }
-
-        Interlocked.Increment(ref _connectionConfigurationRevision);
-        StatusText = "正在应用新配置…";
+        _connectionDesired = false;
+        _manualDisconnect = true;
+        SendRepeatEnabled = false;
+        StopSendRepeat();
         _connectionAttemptCancellation?.Cancel();
+        IsConnected = false;
+        OnPropertyChanged(nameof(ConnectionButtonText));
         EnsureConnectionStateWorker();
     }
 
@@ -2515,10 +2595,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private bool NeedsConnectionStateProcessing() =>
         _connectionDesired != IsConnected
-        || (!_connectionDesired && _session is not null)
-        || (_connectionDesired
-            && IsConnected
-            && Volatile.Read(ref _connectedConfigurationRevision) != Volatile.Read(ref _connectionConfigurationRevision));
+        || (!_connectionDesired && _session is not null);
 
     private async Task ProcessConnectionStateAsync()
     {
@@ -2526,13 +2603,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             while (NeedsConnectionStateProcessing())
             {
-                if (_connectionDesired
-                    && IsConnected
-                    && Volatile.Read(ref _connectedConfigurationRevision) != Volatile.Read(ref _connectionConfigurationRevision))
-                {
-                    await DisconnectSessionAsync("正在应用新配置…").ConfigureAwait(true);
-                    continue;
-                }
                 if (_connectionDesired && !IsConnected && _session is not null)
                 {
                     await DisconnectInternalAsync().ConfigureAwait(true);
@@ -2574,7 +2644,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         try
         {
             WorkspaceMode connectingWorkspace = SelectedWorkspaceMode.Mode;
-            int configurationRevision = Volatile.Read(ref _connectionConfigurationRevision);
             TransportSettings settings = BuildTransportSettings();
             ITransport transport = TransportFactory.Create(settings);
             ICaptureStore capture = CaptureCommunication
@@ -2601,8 +2670,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             CommunicationSession activeSession = _session;
             _consumeTask = Task.Run(() => ConsumeSessionAsync(activeSession, _consumeCancellation.Token), CancellationToken.None);
             _connectedWorkspaceMode = connectingWorkspace;
-            Volatile.Write(ref _connectedConfigurationRevision, configurationRevision);
+            Interlocked.Exchange(ref _terminalPacketDropCount, 0);
+            Interlocked.Exchange(ref _chartValueDropCount, 0);
+            Interlocked.Exchange(ref _frameDropCount, 0);
             _lastDisplayDropCount = 0;
+            _lastTerminalDropLogCount = 0;
+            _lastChartDropLogCount = 0;
+            _lastFrameDropLogCount = 0;
+            _lastQueueSampleTimestamp = DateTimeOffset.MinValue;
             IsConnected = true;
             StatusText = settings switch
             {
@@ -2673,6 +2748,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         consume?.Dispose();
         _pendingTerminal.Clear();
+        _pendingFrames.Clear();
+        _pendingChartValues.Clear();
         _serialTerminalBuffer.Clear();
         _terminalWaveSeparatorTracker.Reset();
         _connectedWorkspaceMode = null;
@@ -2696,7 +2773,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
             if (!IsPaused)
             {
-                _pendingTerminal.Enqueue(packet);
+                EnqueueTerminalPacket(packet);
             }
 
             if (packet.Direction == PacketDirection.Receive && packet.Data.Length > 0)
@@ -2755,13 +2832,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 Match match = Regex.Match(GetSelectedEncoding().GetString(packet.Data), ChartValuePattern);
                 if (match.Success && double.TryParse(match.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
                 {
-                    _pendingChartValues.Enqueue(value);
+                    EnqueueChartValue(value);
                 }
             }
         }
         catch (Exception exception) when (exception is InvalidDataException or FormatException or ArgumentException)
         {
-            _pendingFrames.Enqueue(new FrameRecordItem(packet.Timestamp, packet.Data.Length, ByteText.ToHex(packet.Data), exception.Message, false));
+            EnqueueFrame(new FrameRecordItem(packet.Timestamp, packet.Data.Length, ByteText.ToHex(packet.Data), exception.Message, false));
         }
     }
 
@@ -2773,15 +2850,47 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             DecodedFrame decoded = template is null
                 ? new DecodedFrame(frame, [], false, "未匹配帧模板")
                 : GenericFrameDecoder.Decode(frame, template);
-            _pendingFrames.Enqueue(FrameRecordItem.Create(timestamp, decoded, template?.Name));
+            EnqueueFrame(FrameRecordItem.Create(timestamp, decoded, template?.Name));
             foreach (DecodedField field in decoded.Fields)
             {
                 if (field.Value is double numeric)
                 {
-                    _pendingChartValues.Enqueue(numeric);
+                    EnqueueChartValue(numeric);
                 }
             }
         }
+    }
+
+    private void EnqueueChartValue(double value)
+    {
+        if (_pendingChartValues.Count >= MaximumPendingChartValues)
+        {
+            Interlocked.Increment(ref _chartValueDropCount);
+            return;
+        }
+
+        _pendingChartValues.Enqueue(value);
+    }
+
+    private void EnqueueTerminalPacket(TransportPacket packet)
+    {
+        _pendingTerminal.Enqueue(packet);
+        while (_pendingTerminal.Count > MaximumPendingTerminalPackets
+            && _pendingTerminal.TryDequeue(out _))
+        {
+            Interlocked.Increment(ref _terminalPacketDropCount);
+        }
+    }
+
+    private void EnqueueFrame(FrameRecordItem frame)
+    {
+        if (_pendingFrames.Count >= MaximumPendingFrames)
+        {
+            Interlocked.Increment(ref _frameDropCount);
+            return;
+        }
+
+        _pendingFrames.Enqueue(frame);
     }
 
     private FrameTemplate? SelectFrameTemplate(ReadOnlySpan<byte> frame)
@@ -2977,7 +3086,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         int added = displayRecords.Count;
         int limit = SelectedProfile?.Terminal.UiRecordLimit ?? 100_000;
-        TerminalRecords.RemoveFirst(TerminalRecords.Count - limit);
+        if (TerminalRecords.Count > limit + TerminalEvictionBatchSize)
+        {
+            TerminalRecords.RemoveFirst(TerminalRecords.Count - limit);
+        }
 
         int frameAdded = 0;
         List<FrameRecordItem> frameBatch = [];
@@ -2990,11 +3102,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             FrameRecords.AddRange(frameBatch);
         }
-        FrameRecords.RemoveFirst(FrameRecords.Count - 20_000);
+        if (FrameRecords.Count > FrameRecordLimit + FrameEvictionBatchSize)
+        {
+            FrameRecords.RemoveFirst(FrameRecords.Count - FrameRecordLimit);
+        }
 
-        while (_pendingChartValues.TryDequeue(out double value))
+        int chartAdded = 0;
+        while (chartAdded < ChartValuesPerUiTick && _pendingChartValues.TryDequeue(out double value))
         {
             ChartValueAdded?.Invoke(value);
+            chartAdded++;
         }
 
         ReceivedBytes = Interlocked.Read(ref _rxTotal);
@@ -3008,7 +3125,71 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 displayDropCount);
             _lastDisplayDropCount = displayDropCount;
         }
+        long terminalDropCount = Interlocked.Read(ref _terminalPacketDropCount);
+        if (terminalDropCount > _lastTerminalDropLogCount)
+        {
+            Log.Warning(
+                "终端待显示队列达到上限丢包 | 本次新增={Dropped} | 累计={Total}",
+                terminalDropCount - _lastTerminalDropLogCount,
+                terminalDropCount);
+            _lastTerminalDropLogCount = terminalDropCount;
+        }
+        long chartDropCount = Interlocked.Read(ref _chartValueDropCount);
+        if (chartDropCount > _lastChartDropLogCount)
+        {
+            Log.Warning(
+                "曲线值队列达到上限丢弃 | 本次新增={Dropped} | 累计={Total}",
+                chartDropCount - _lastChartDropLogCount,
+                chartDropCount);
+            _lastChartDropLogCount = chartDropCount;
+        }
+        long frameDropCount = Interlocked.Read(ref _frameDropCount);
+        if (frameDropCount > _lastFrameDropLogCount)
+        {
+            Log.Warning(
+                "帧记录队列达到上限丢弃 | 本次新增={Dropped} | 累计={Total}",
+                frameDropCount - _lastFrameDropLogCount,
+                frameDropCount);
+            _lastFrameDropLogCount = frameDropCount;
+        }
         DateTimeOffset now = DateTimeOffset.Now;
+        if (now - _lastQueueSampleTimestamp >= TimeSpan.FromSeconds(1))
+        {
+            _lastQueueSampleTimestamp = now;
+            if (File.Exists(AppPaths.DebugLoggingMarkerPath))
+            {
+                long workerBytes = 0;
+                long workerRetries = 0;
+                long workerTimeouts = 0;
+                long captureDropCount = _session?.CaptureDropCount ?? 0;
+                if (_session?.Transport is SerialPortTransport serialTransport)
+                {
+                    workerBytes = serialTransport.WorkerReceivedBytes;
+                    workerRetries = serialTransport.WorkerRetryCount;
+                    workerTimeouts = serialTransport.WorkerTimeoutStreak;
+                }
+
+                Log.Information(
+                    "通信采样 | 底层接收={WorkerBytes} | 传输接收={ReceivedBytes} | 发送={SentBytes} | "
+                        + "终端待显示={PendingTerminal} | 帧待解析={PendingFrames} | 曲线待入队={PendingChartValues} | "
+                        + "显示丢弃累计={DisplayDropCount} | 终端丢弃累计={TerminalDropCount} | 曲线丢弃累计={ChartDropCount} | "
+                        + "帧丢弃累计={FrameDropCount} | 捕获丢弃累计={CaptureDropCount} | "
+                        + "工作进程累计重试={WorkerRetries} | 工作进程连续超时={WorkerTimeouts}",
+                    workerBytes,
+                    ReceivedBytes,
+                    SentBytes,
+                    _pendingTerminal.Count,
+                    _pendingFrames.Count,
+                    _pendingChartValues.Count,
+                    displayDropCount,
+                    terminalDropCount,
+                    chartDropCount,
+                    frameDropCount,
+                    captureDropCount,
+                    workerRetries,
+                    workerTimeouts);
+            }
+        }
         if (SelectedFramingMode == FramingMode.IdleGap && !_idleGapFlushed && now - _lastFrameInput >= TimeSpan.FromMilliseconds(Math.Max(1, IdleGapMs)))
         {
             IReadOnlyList<byte[]> frames;
@@ -3173,18 +3354,36 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             RefreshSendCommandAvailability();
         }
-        if (sender is QuickCommandItemViewModel { IsRepeating: true } repeating
-            && args.PropertyName is nameof(QuickCommandItemViewModel.Payload)
+        if (sender is QuickCommandItemViewModel changedCommand)
+        {
+            bool payloadChanged = args.PropertyName is nameof(QuickCommandItemViewModel.Payload)
                 or nameof(QuickCommandItemViewModel.Template)
+                or nameof(QuickCommandItemViewModel.TemplateOrPayload)
                 or nameof(QuickCommandItemViewModel.LineEnding)
                 or nameof(QuickCommandItemViewModel.Checksum)
                 or nameof(QuickCommandItemViewModel.ChecksumLittleEndian)
-                or nameof(QuickCommandItemViewModel.RepeatIntervalMs)
                 or nameof(QuickCommandItemViewModel.SelectedVariableSet)
-                or nameof(QuickCommandItemViewModel.VariableSets))
-        {
-            StopQuickCommandRepeat(repeating);
-            StatusText = "快捷指令参数已变化，循环发送已停止";
+                or nameof(QuickCommandItemViewModel.VariableSets);
+            bool mainRepeatStopped = changedCommand.IsRepeating
+                && (payloadChanged || args.PropertyName == nameof(QuickCommandItemViewModel.RepeatIntervalMs));
+            bool parameterRepeatStopped = changedCommand.IsParameterRepeating
+                && (payloadChanged || args.PropertyName == nameof(QuickCommandItemViewModel.ParameterRepeatIntervalMs));
+            if (mainRepeatStopped)
+            {
+                StopQuickCommandMainRepeat(changedCommand);
+            }
+            if (parameterRepeatStopped)
+            {
+                StopQuickParameterRepeat(changedCommand);
+            }
+            if (mainRepeatStopped || parameterRepeatStopped)
+            {
+                StatusText = mainRepeatStopped && parameterRepeatStopped
+                    ? "快捷指令和快捷参数循环发送已停止"
+                    : mainRepeatStopped
+                        ? "快捷指令循环发送已停止"
+                        : "快捷参数循环发送已停止";
+            }
         }
         ScheduleProfileSave();
     }

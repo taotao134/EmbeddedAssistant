@@ -69,6 +69,7 @@ public sealed record QuickCommand
     public ChecksumKind Checksum { get; init; }
     public bool ChecksumLittleEndian { get; init; } = true;
     public int RepeatIntervalMs { get; init; } = 1000;
+    public int ParameterRepeatIntervalMs { get; init; } = 1000;
     public bool RepeatEnabled { get; init; }
     public string Shortcut { get; init; } = string.Empty;
     public long UsageCount { get; init; }

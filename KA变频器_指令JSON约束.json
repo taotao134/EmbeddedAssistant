@@ -1,0 +1,773 @@
+{
+  "ConstraintVersion": 1,
+  "DocumentType": "DeviceDebugStudio.CommandImportConstraints",
+  "Name": "KA 变频器指令 JSON 生成约束",
+  "Purpose": "供 Codex 根据嵌入式工程的 proc_cmd.c 生成 DeviceDebugStudio 可导入的单一 DeviceProfile JSON；同一个文件同时适配串口和 UDP。",
+  "AuthoritativeSources": [
+    {
+      "Path": "D:\\bj_hmt\\ka_earth_station\\tj_ka_up_converter\\Up_Converter_192.168.1.10\\src\\proc_cmd.c",
+      "Role": "命令宏、解析顺序、参数校验、硬件副作用和响应格式的第一来源。"
+    },
+    {
+      "Path": "D:\\bj_hmt\\ka_earth_station\\tj_ka_up_converter\\Up_Converter_192.168.1.10\\Docs\\COMM_PROTOCOL.md",
+      "Role": "传输行为、字段含义、兼容命令和工程级协议说明。"
+    },
+    {
+      "Path": "D:\\bj_hmt\\ka_earth_station\\tj_ka_up_converter\\Up_Converter_192.168.1.10\\Docs\\AGENT.md",
+      "Role": "工程维护约束、串口/UDP 入口和硬件复用风险。"
+    },
+    {
+      "Path": "C:\\Users\\12087\\Desktop\\ka变频器.json",
+      "Role": "当前软件已导出的 DeviceProfile 实例，用于校对导入字段形状。"
+    }
+  ],
+  "SoftwareImport": {
+    "Software": "DeviceDebugStudio",
+    "ProfileType": "DeviceProfile",
+    "SupportedSchemaVersion": 1,
+    "RootIsSingleObject": true,
+    "DoNotGenerateProfileArray": true,
+    "UnknownPropertiesAreIgnoredByImporter": true,
+    "RequiredRootProperties": [
+      "SchemaVersion",
+      "Id",
+      "Name",
+      "Description",
+      "WorkspaceMode",
+      "Transport",
+      "Terminal",
+      "CommandGroups",
+      "FrameTemplate",
+      "FrameTemplates",
+      "ChartBindings",
+      "UpdatedAt"
+    ],
+    "Enums": {
+      "WorkspaceMode": [
+        "Serial",
+        "Network",
+        "Bluetooth",
+        "Modbus"
+      ],
+      "Transport.$type": [
+        "serial",
+        "tcp-client",
+        "tcp-server",
+        "udp",
+        "ble-gatt"
+      ],
+      "Transport.Kind": [
+        "Serial",
+        "TcpClient",
+        "TcpServer",
+        "Udp",
+        "BleGatt"
+      ],
+      "QuickCommandGroup.Category": [
+        "Serial",
+        "Tcp",
+        "Bluetooth",
+        "Modbus",
+        "Sscom"
+      ],
+      "QuickCommand.Checksum": [
+        "None",
+        "Xor8",
+        "Add8",
+        "Crc8",
+        "Crc16Modbus",
+        "Crc16Ccitt",
+        "Crc32"
+      ],
+      "QuickCommand.LineEnding": [
+        "None",
+        "CR",
+        "LF",
+        "CRLF"
+      ],
+      "FrameTemplate.Mode": [
+        "Raw",
+        "Line",
+        "Delimiter",
+        "FixedLength",
+        "LengthField",
+        "IdleGap"
+      ]
+    },
+    "QuickCommandFields": {
+      "RequiredForPortableOutput": [
+        "Id",
+        "Name",
+        "Payload",
+        "Template",
+        "IsHex",
+        "LineEnding",
+        "Checksum",
+        "ChecksumLittleEndian",
+        "RepeatIntervalMs",
+        "RepeatEnabled",
+        "Shortcut",
+        "UsageCount",
+        "LastUsedAt",
+        "IsPinned",
+        "PinnedOrder",
+        "NameColumnWeight",
+        "PayloadColumnWeight",
+        "Variables",
+        "VariableSets",
+        "SelectedVariableSetId"
+      ],
+      "TextCommandDefaults": {
+        "IsHex": false,
+        "LineEnding": "CRLF",
+        "Checksum": "None",
+        "ChecksumLittleEndian": true,
+        "RepeatIntervalMs": 1000,
+        "RepeatEnabled": false,
+        "Shortcut": "",
+        "UsageCount": 0,
+        "LastUsedAt": null,
+        "IsPinned": false,
+        "PinnedOrder": 0,
+        "NameColumnWeight": 132,
+        "PayloadColumnWeight": 300,
+        "Variables": [],
+        "VariableSets": [],
+        "SelectedVariableSetId": null
+      }
+    }
+  },
+  "GenerationRules": {
+    "OutputOneFilePerTransport": false,
+    "SerialAndUdpUseTheSamePayloads": true,
+    "SingleFileContainsBothTransportCategories": true,
+    "DefaultWorkspaceMode": "Serial",
+    "PayloadMustNotContainLineEnding": true,
+    "CommandLineEnding": "CRLF",
+    "TextEncoding": "ASCII",
+    "IsHex": false,
+    "Checksum": "None",
+    "ChecksumLittleEndian": true,
+    "TemplateEqualsPayloadWhenNoVariables": true,
+    "VariableTemplate": {
+    "Syntax": "${name} 或 &{name}",
+    "NamePattern": "^[\\p{L}\\p{Nl}_][\\p{L}\\p{Nl}\\p{M}\\p{N}_]*$",
+      "PayloadUsesConcreteValues": true,
+      "TemplateUsesVariables": true,
+      "VariableValuesLocation": "Use Variables for one editable default set; use VariableSets for selectable presets and set SelectedVariableSetId to one valid set.",
+      "ClosingBraceRequired": true
+    },
+    "UseConcreteValidExamplesByDefault": true,
+    "UseUniqueGuidForEveryProfileAndCommand": true,
+    "IncludeUnimplementedCommandsByDefault": false,
+    "IncludeCompatibilityRejectedCommands": false,
+    "IncludeDeviceToDisplayEventsAsHostCommands": false,
+    "CommandGroupCategory": {
+      "Serial": "Serial",
+      "Udp": "Tcp"
+    },
+    "SafetyRules": [
+      "命令关键字、大小写、逗号位置和参数顺序必须保持源码原样。",
+      "所有参数先使用合法示例值；不要为了展示范围而生成空字段或尾随逗号。",
+      "频率、功率和衰减命令必须使用源码允许的单位与范围。",
+      "网络参数命令只生成四段 0~255 的合法 IPv4 示例。",
+      "被标记为 compatibility_rejected 的命令不生成到默认导入文件；需要回归测试时只能由用户显式单独生成。",
+      "legacy_placeholder 和 unimplemented 命令不放入默认可发送分组；需要回归旧协议时再显式生成。",
+      "不要把 UDP 的请求回显伪造成设备响应；回显由固件 net_task 自动发送。"
+    ],
+    "CodexWorkflow": [
+      "先读取用户指定工程的 proc_cmd.c、对应头文件和协议文档。",
+      "逐个确认命令是否存在于实际解析分支；宏存在但没有分支的命令标记为 unimplemented。",
+      "为每个命令生成 Name、Payload、Template、参数说明、成功响应和错误响应。",
+      "只生成一个单对象 JSON，默认 WorkspaceMode=Serial、Transport 使用 serial；CommandGroups 同时包含 Category=Serial 和 Category=Tcp 两组，且两组 Payload 集合完全一致。",
+      "用户切换到 Network 工作页后，软件会自动选择 Tcp 快捷指令分类；用户再在网络传输设置中选择 Udp 并填写设备端点。",
+      "生成后用 JSON 解析器校验，并检查每个 Payload 都符合本文件的 CommandDefinitions。"
+    ]
+  },
+  "TransportProfiles": {
+    "Serial": {
+      "WorkspaceMode": "Serial",
+      "CommandCategory": "Serial",
+      "Transport": {
+        "$type": "serial",
+        "PortName": "",
+        "BaudRate": 115200,
+        "DataBits": 8,
+        "Parity": "None",
+        "StopBits": "One",
+        "Handshake": "None",
+        "DtrEnable": false,
+        "RtsEnable": false,
+        "Kind": "Serial",
+        "AutoReconnect": false
+      },
+      "Notes": [
+        "USART1 和 USART3 均为 115200, 8N1。",
+        "串口接收以 LF 结束，推荐上位机发送 CRLF；串口只返回处理结果，不回显请求。",
+        "PortName 留空，导入后在当前软件里选择实际 COM 口。"
+      ]
+    },
+    "Udp": {
+      "WorkspaceMode": "Network",
+      "CommandCategory": "Tcp",
+      "Transport": {
+        "$type": "udp",
+        "LocalAddress": "0.0.0.0",
+        "LocalPort": 777,
+        "RemoteAddress": "192.168.1.10",
+        "RemotePort": 10071,
+        "EnableBroadcast": false,
+        "MulticastAddress": null,
+        "Kind": "Udp",
+        "AutoReconnect": false
+      },
+      "Notes": [
+        "设备监听 UDP 10071；当前软件本地端口使用 777。",
+        "UDP 每次只发送一条完整命令；设备先回显原始请求，再发送处理结果，两者是两个 UDP 数据报。",
+        "RemoteAddress 应按现场设备 IP 修改，默认值来自当前工程和桌面样例。"
+      ]
+    }
+  },
+  "Protocol": {
+    "CommandPrefix": "$",
+    "ParameterSeparator": ",",
+    "CaseSensitive": true,
+    "DefaultLineEnding": "CRLF",
+    "DefaultEncoding": "ASCII",
+    "Checksum": "None",
+    "MaxUdpReceiveBytes": 1499,
+    "SerialInputs": [
+      "USART1：站控/后端串口命令入口。",
+      "USART3：显示板 USART2 的主控侧命令入口，也会调用同一个 proc_cmd()。"
+    ],
+    "ResponseTransportDifference": {
+      "Serial": "只发送 proc_cmd() 生成的结果。",
+      "Udp": "先发送原始请求回显，再发送 proc_cmd() 生成的结果。"
+    },
+    "CommonResponses": {
+      "Ok": "$>OK\\r\\n",
+      "ArgError": "$>ERR,ARG\\r\\n",
+      "RangeError": "$>ERR,RANGE\\r\\n",
+      "LockError": "$>ERR,LOCK\\r\\n",
+      "InternalError": "$>ERR,INTERNAL\\r\\n",
+      "BusyError": "$>ERR,BUSY\\r\\n"
+    },
+    "MatchingCaveat": "proc_cmd.c 使用 strstr()，因此上位机必须发送精确的单条命令，不能依赖前缀边界或把多条命令拼成一帧。"
+  },
+  "CommandDefinitions": [
+    {
+      "Key": "set2595",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SET2595,<freq_ghz>[,<pwr>]",
+      "Examples": ["$SET2595,9.690000,30", "$SET2595,9.690000"],
+      "Parameters": [
+        { "Name": "freq_ghz", "Type": "number", "Required": true, "Min": 9.29, "Max": 11.59, "Unit": "GHz" },
+        { "Name": "pwr", "Type": "integer", "Required": false, "Default": 30, "Min": 0, "Max": 63, "Unit": "LMX2595 power code" }
+      ],
+      "SuccessResponse": "$<freq_ghz with 6 decimals>GHz\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n", "$>ERR,RANGE\\r\\n", "$>ERR,LOCK\\r\\n"],
+      "Notes": ["参数是 LMX2595 本振 GHz，不是业务 RF MHz。", "配置成功后保存频率/功率并更新 PD14。"],
+      "SourceLine": 766
+    },
+    {
+      "Key": "set2594",
+      "Status": "compatibility_rejected",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SET2594,<index>,<freq_ghz>,<pwr>",
+      "Examples": ["$SET2594,2,3.300000,20"],
+      "Parameters": [
+        { "Name": "index", "Type": "text", "Required": true, "Validation": "非空，占位字段" },
+        { "Name": "freq_ghz", "Type": "text", "Required": true, "Validation": "非空，占位字段" },
+        { "Name": "pwr", "Type": "text", "Required": true, "Validation": "非空，占位字段" }
+      ],
+      "SuccessResponse": null,
+      "ErrorResponses": ["$>ERR,IF_MANAGED\\r\\n", "$>ERR,ARG\\r\\n"],
+      "Notes": ["恰好三个非空字段时固定返回 IF_MANAGED，不改硬件。"],
+      "SourceLine": 747
+    },
+    {
+      "Key": "setiffreq",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SETIFFREQ,<freq_mhz>",
+      "Examples": ["$SETIFFREQ,70", "$SETIFFREQ,720", "$SETIFFREQ,1200"],
+      "Parameters": [
+        { "Name": "freq_mhz", "Type": "integer", "Required": true, "Allowed": [70, 720, 1200], "Unit": "MHz" }
+      ],
+      "SuccessResponse": "$<freq_mhz>MHz\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n", "$>ERR,LOCK\\r\\n"],
+      "Notes": ["切换 IF GPIO 和可切换 LMX2594，并同步显示板。"],
+      "SourceLine": 594
+    },
+    {
+      "Key": "setvc",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SETVC,<0|1>",
+      "Examples": ["$SETVC,0", "$SETVC,1"],
+      "Parameters": [
+        { "Name": "vc", "Type": "binary", "Required": true, "Allowed": [0, 1], "Mapping": { "0": "70 MHz", "1": "720 MHz" } }
+      ],
+      "SuccessResponse": "$>OK\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n", "$>ERR,LOCK\\r\\n"],
+      "Notes": ["SETIFFREQ 的兼容别名；不支持 1200 MHz。"],
+      "SourceLine": 983
+    },
+    {
+      "Key": "getstatus",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$GETSTATUS",
+      "Examples": ["$GETSTATUS"],
+      "Parameters": [],
+      "SuccessResponse": "$<10m_sel>,<vc>,<freq2595_ghz>,<buc_amp_db>,<pa1>,<pa2>,<pa3>,<pa4>,<pa5>,<pa6>\\r\\n$>OK\\r\\n",
+      "ErrorResponses": [],
+      "Notes": ["当前源码中 pa4 字段固定输出 0；freq2595 是最近设置的本振 GHz。"],
+      "SourceLine": 509
+    },
+    {
+      "Key": "getiffreq",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$GETIFFREQ",
+      "Examples": ["$GETIFFREQ"],
+      "Parameters": [],
+      "SuccessResponse": "$IF,<freq_mhz>\\r\\n$>OK\\r\\n",
+      "ErrorResponses": [],
+      "SourceLine": 527
+    },
+    {
+      "Key": "getfan",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$GETFAN",
+      "Examples": ["$GETFAN"],
+      "Parameters": [],
+      "SuccessResponse": "$FAN,<fan1>,<fan2>\\r\\n$>OK\\r\\n",
+      "ErrorResponses": [],
+      "Notes": ["两路风扇为高有效常开状态，当前无关闭命令。"],
+      "SourceLine": 533
+    },
+    {
+      "Key": "get10m",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$GET10M",
+      "Examples": ["$GET10M"],
+      "Parameters": [],
+      "SuccessResponse": "$10M,<0|1>\\r\\n$>OK\\r\\n",
+      "ErrorResponses": ["$>ERR,MIXED_10M\\r\\n"],
+      "SourceLine": 540
+    },
+    {
+      "Key": "getrfstate",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$GETRFSTATE",
+      "Examples": ["$GETRFSTATE"],
+      "Parameters": [],
+      "SuccessResponse": "$RFSTATE,2594_650=<0|1>,2594_IF=<0|1>,2595=<0|1>,BUC2=<0|1>,IF=<mhz>,LO2595=<ghz>,POWER=<code>,LNB1=<db>,LNB2=<db>,10M=<0|1>\\r\\n$>OK\\r\\n",
+      "ErrorResponses": [],
+      "SourceLine": 550
+    },
+    {
+      "Key": "getpower",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$GETPOWER",
+      "Examples": ["$GETPOWER"],
+      "Parameters": [],
+      "SuccessResponse": "$POWER,BUC2=<0|1>,PA6V=<0|1>,BUCS10V5=<0|1>,LNB1=<0|1>,BUCS6V=<0|1>,IF_BUC0=<0|1>\\r\\n$>OK\\r\\n",
+      "ErrorResponses": [],
+      "SourceLine": 562
+    },
+    {
+      "Key": "getdiag",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$GETDIAG",
+      "Examples": ["$GETDIAG"],
+      "Parameters": [],
+      "SuccessResponse": "$RESET_CSR=0x????????,RESET_CAUSE=<cause>,STACK_OVF_CNT=<cnt>,STACK_OVF_TASK=<task>,WDT_MISS_CNT=<cnt>,WDT_MISS_TASK=<task>,WDT_MISS_STAGE=<stage>,WDT_MISS_TICK=<tick>,WDT_NET_DELTA=<tick>,WDT_UART_DELTA=<tick>\\r\\n$>OK\\r\\n",
+      "ErrorResponses": [],
+      "SourceLine": 575
+    },
+    {
+      "Key": "setbucamp",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SETBUCAMP,<att_db>",
+      "Examples": ["$SETBUCAMP,10.00", "$SETBUCAMP,10.25"],
+      "Parameters": [
+        { "Name": "att_db", "Type": "number", "Required": true, "Min": 0, "Max": 31.75, "Step": 0.25, "Unit": "dB" }
+      ],
+      "SuccessResponse": "$-<att_db with 2 decimals>dB\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n", "$>ERR,ATT_RANGE\\r\\n"],
+      "Notes": ["设置 LNB2/BUCS 通道，内部控制码为 dB*4。"],
+      "SourceLine": 914
+    },
+    {
+      "Key": "setlnbamp",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SETLNBAMP,<1|2>,<att_db>",
+      "Examples": ["$SETLNBAMP,1,10.00", "$SETLNBAMP,2,10.00"],
+      "Parameters": [
+        { "Name": "index", "Type": "integer", "Required": true, "Allowed": [1, 2] },
+        { "Name": "att_db", "Type": "number", "Required": true, "Min": 0, "Max": 31.75, "Step": 0.25, "Unit": "dB" }
+      ],
+      "SuccessResponse": "$-<att_db with 2 decimals>dB\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n", "$>ERR,ATT_RANGE\\r\\n"],
+      "Notes": ["index=1 使用 LNB1/PB9，index=2 使用 LNB2/BUCS/PB14。"],
+      "SourceLine": 941
+    },
+    {
+      "Key": "lcdset_gain",
+      "Status": "active_display_compatibility",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$LCDSET,GAIN,<att_db>",
+      "Examples": ["$LCDSET,GAIN,10.00"],
+      "Parameters": [
+        { "Name": "att_db", "Type": "number", "Required": true, "Min": 0, "Max": 31.75, "Step": 0.25, "Unit": "dB" }
+      ],
+      "SuccessResponse": "$-<att_db with 2 decimals>dB\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n", "$>ERR,ATT_RANGE\\r\\n"],
+      "Notes": ["显示板 USART2 到主控 USART3 的本地确认命令；上位机默认不发送。"],
+      "SourceLine": 622
+    },
+    {
+      "Key": "setpa6v",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SETPA6V,<0|1>",
+      "Examples": ["$SETPA6V,1", "$SETPA6V,0"],
+      "Parameters": [
+        { "Name": "value", "Type": "binary", "Required": true, "Allowed": [0, 1] }
+      ],
+      "SuccessResponse": "$>OK\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n"],
+      "Notes": ["控制 PA6V 电源轨 PE8。"],
+      "SourceLine": 393
+    },
+    {
+      "Key": "setpower",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SETPOWER,<rail>,<0|1>",
+      "Examples": ["$SETPOWER,PA6V,1", "$SETPOWER,BUC2,1", "$SETPOWER,BUCS6V,1"],
+      "Parameters": [
+        { "Name": "rail", "Type": "enum", "Required": true, "Allowed": ["BUC2", "PA6V", "BUCS10V5", "LNB1", "BUCS6V"] },
+        { "Name": "value", "Type": "binary", "Required": true, "Allowed": [0, 1] }
+      ],
+      "SuccessResponse": "$>OK\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n"],
+      "Notes": ["BUCS6V=0 被拒绝；BUC2 关闭前撤销 PD14，开启后按当前本振恢复。"],
+      "SourceLine": 414
+    },
+    {
+      "Key": "set10m",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SET10M,<0|1>",
+      "Examples": ["$SET10M,1", "$SET10M,0"],
+      "Parameters": [
+        { "Name": "value", "Type": "binary", "Required": true, "Allowed": [0, 1] }
+      ],
+      "SuccessResponse": "$>OK\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n"],
+      "Notes": ["PB15 和 PD8 联合控制，1=双高开启，0=双低关闭。"],
+      "SourceLine": 458
+    },
+    {
+      "Key": "set10msel",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SET10MSEL,<0|1>",
+      "Examples": ["$SET10MSEL,1", "$SET10MSEL,0"],
+      "Parameters": [
+        { "Name": "value", "Type": "binary", "Required": true, "Allowed": [0, 1] }
+      ],
+      "SuccessResponse": "$>OK\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n", "$>ERR,MIXED_10M\\r\\n"],
+      "Notes": ["SET10M 的兼容别名，并额外同步显示板 10 MHz 状态。"],
+      "SourceLine": 481
+    },
+    {
+      "Key": "getip",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$GETIP",
+      "Examples": ["$GETIP"],
+      "Parameters": [],
+      "SuccessResponse": "$<a>.<b>.<c>.<d>\\r\\n",
+      "ErrorResponses": [],
+      "SourceLine": 667
+    },
+    {
+      "Key": "setip",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SETIP,<a>,<b>,<c>,<d>",
+      "Examples": ["$SETIP,192,168,1,10"],
+      "Parameters": [
+        { "Name": "a..d", "Type": "ipv4_octet", "Required": true, "Count": 4, "Min": 0, "Max": 255 }
+      ],
+      "SuccessResponse": "$>OK\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n"],
+      "Notes": ["写入 Flash；当前运行中的 LwIP 参数不会立即刷新，建议重启。源码历史实现对输入使用 atoi，生成器仍必须只生成严格合法 IPv4。"],
+      "SourceLine": 720
+    },
+    {
+      "Key": "setnetmask",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SETNETMASK,<a>,<b>,<c>,<d>",
+      "Examples": ["$SETNETMASK,255,255,255,0"],
+      "Parameters": [
+        { "Name": "a..d", "Type": "ipv4_octet", "Required": true, "Count": 4, "Min": 0, "Max": 255 }
+      ],
+      "SuccessResponse": "$>OK\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n"],
+      "Notes": ["写入 Flash；建议使用合法连续掩码并在修改后重启。源码历史实现对输入使用 atoi。"],
+      "SourceLine": 700
+    },
+    {
+      "Key": "setgateway",
+      "Status": "active",
+      "IncludeInDefaultImport": true,
+      "PayloadTemplate": "$SETGATEWAY,<a>,<b>,<c>,<d>",
+      "Examples": ["$SETGATEWAY,192,168,1,1"],
+      "Parameters": [
+        { "Name": "a..d", "Type": "ipv4_octet", "Required": true, "Count": 4, "Min": 0, "Max": 255 }
+      ],
+      "SuccessResponse": "$>OK\\r\\n",
+      "ErrorResponses": ["$>ERR,ARG\\r\\n"],
+      "Notes": ["写入 Flash；建议修改后重启。源码历史实现对输入使用 atoi。"],
+      "SourceLine": 680
+    },
+    {
+      "Key": "setpa_index",
+      "Status": "compatibility_rejected",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETPA<n>,<0|1>",
+      "Examples": ["$SETPA1,1", "$SETPA6,0"],
+      "Parameters": [
+        { "Name": "n", "Type": "integer_in_command_name", "Required": true, "Allowed": [1, 2, 3, 4, 5, 6] },
+        { "Name": "value", "Type": "binary", "Required": true, "Allowed": [0, 1] }
+      ],
+      "SuccessResponse": null,
+      "ErrorResponses": ["$>ERR,LEGACY_PINMAP\\r\\n"],
+      "Notes": ["历史 PA 索引命令固定拒绝，不改变任何引脚。"],
+      "SourceLine": 661
+    },
+    {
+      "Key": "setpaall",
+      "Status": "compatibility_rejected",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETPAALL,<v1>,<v2>,<v3>,<v4>,<v5>,<v6>",
+      "Examples": ["$SETPAALL,1,1,0,0,1,0"],
+      "Parameters": [
+        { "Name": "v1..v6", "Type": "binary", "Required": true, "Count": 6, "Allowed": [0, 1] }
+      ],
+      "SuccessResponse": null,
+      "ErrorResponses": ["$>ERR,LEGACY_PINMAP\\r\\n"],
+      "Notes": ["历史批量 PA 命令固定拒绝。"],
+      "SourceLine": 655
+    },
+    {
+      "Key": "setgpio_index",
+      "Status": "compatibility_rejected",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETGPIO<n>,<0|1>",
+      "Examples": ["$SETGPIO1,1", "$SETGPIO2,0"],
+      "Parameters": [
+        { "Name": "n", "Type": "integer_in_command_name", "Required": true, "Allowed": [1, 2] },
+        { "Name": "value", "Type": "binary", "Required": true, "Allowed": [0, 1] }
+      ],
+      "SuccessResponse": null,
+      "ErrorResponses": ["$>ERR,LEGACY_PINMAP\\r\\n"],
+      "Notes": ["无逗号前缀的历史 GPIO 命令固定拒绝。"],
+      "SourceLine": 650
+    },
+    {
+      "Key": "setgpio_mode",
+      "Status": "compatibility_rejected",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETGPIO,<mode>",
+      "Examples": ["$SETGPIO,1", "$SETGPIO,2"],
+      "Parameters": [
+        { "Name": "mode", "Type": "text", "Required": true, "Validation": "旧协议占位字段" }
+      ],
+      "SuccessResponse": null,
+      "ErrorResponses": ["$>ERR,LEGACY_PINMAP\\r\\n"],
+      "Notes": ["有逗号前缀的历史 GPIO 路由命令固定拒绝。"],
+      "SourceLine": 644
+    },
+    {
+      "Key": "setlnb6v",
+      "Status": "compatibility_rejected",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETLNB6V,<index>,<0|1>",
+      "Examples": ["$SETLNB6V,1,1"],
+      "Parameters": [
+        { "Name": "index", "Type": "integer", "Required": true, "Validation": "旧协议占位字段" },
+        { "Name": "value", "Type": "binary", "Required": true, "Allowed": [0, 1] }
+      ],
+      "SuccessResponse": null,
+      "ErrorResponses": ["$>ERR,LEGACY_POWER\\r\\n"],
+      "Notes": ["请使用 SETPOWER；不会改变引脚。"],
+      "SourceLine": 452
+    },
+    {
+      "Key": "setbuc6v",
+      "Status": "compatibility_rejected",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETBUC6V,<0|1>",
+      "Examples": ["$SETBUC6V,1"],
+      "Parameters": [
+        { "Name": "value", "Type": "binary", "Required": true, "Allowed": [0, 1] }
+      ],
+      "SuccessResponse": null,
+      "ErrorResponses": ["$>ERR,LEGACY_PINMAP\\r\\n"],
+      "Notes": ["旧命令可能复用风扇/IF 引脚，固定拒绝。"],
+      "SourceLine": 741
+    },
+    {
+      "Key": "setall_mdpower",
+      "Status": "compatibility_rejected",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETALL_MDPOWER,<0|1>",
+      "Examples": ["$SETALL_MDPOWER,1"],
+      "Parameters": [
+        { "Name": "value", "Type": "binary", "Required": true, "Allowed": [0, 1] }
+      ],
+      "SuccessResponse": null,
+      "ErrorResponses": ["$>ERR,LEGACY_POWER\\r\\n"],
+      "Notes": ["旧总电源命令与 IF 资源复用，固定拒绝。"],
+      "SourceLine": 1011
+    },
+    {
+      "Key": "setbuclof",
+      "Status": "legacy_placeholder",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETBUCLOF,<freq_ghz>",
+      "Examples": ["$SETBUCLOF,10.0000"],
+      "Parameters": [
+        { "Name": "freq_ghz", "Type": "legacy_float", "Required": true, "Validation": "源码使用 atof，范围未定义" }
+      ],
+      "SuccessResponse": "$>OK\\r\\n",
+      "ErrorResponses": [],
+      "Notes": ["分支存在并延时，但实际 LMX2594 配置调用已注释；不能作为真实频率控制命令。"],
+      "SourceLine": 875
+    },
+    {
+      "Key": "setlnblof",
+      "Status": "legacy_placeholder",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETLNBLOF,<freq_ghz>",
+      "Examples": ["$SETLNBLOF,10.0000"],
+      "Parameters": [
+        { "Name": "freq_ghz", "Type": "legacy_float", "Required": true, "Validation": "源码使用 atof，范围未定义" }
+      ],
+      "SuccessResponse": "$>OK\\r\\n",
+      "ErrorResponses": [],
+      "Notes": ["分支存在但实际 LMX2594 配置调用已注释；不能作为真实频率控制命令。"],
+      "SourceLine": 834
+    },
+    {
+      "Key": "setbuclof_int",
+      "Status": "legacy_placeholder",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETBUCLOF_INT,<start_ghz>,<end_ghz>,<step_mhz>,<delay_ms>",
+      "Examples": ["$SETBUCLOF_INT,9.0000,10.0000,10,100"],
+      "Parameters": [
+        { "Name": "start_ghz", "Type": "legacy_float", "Required": true },
+        { "Name": "end_ghz", "Type": "legacy_float", "Required": true },
+        { "Name": "step_mhz", "Type": "legacy_float", "Required": true },
+        { "Name": "delay_ms", "Type": "integer", "Required": true }
+      ],
+      "SuccessResponse": "$>OK\\r\\n",
+      "ErrorResponses": [],
+      "Notes": ["只保留循环和延时，实际频率配置调用已注释；默认禁止生成。"],
+      "SourceLine": 800
+    },
+    {
+      "Key": "setlnblof_int",
+      "Status": "unimplemented",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETLNBLOF_INT,<...>",
+      "Examples": [],
+      "Parameters": [],
+      "SuccessResponse": null,
+      "ErrorResponses": ["通常落入 $>ERR,ARG\\r\\n"],
+      "Notes": ["宏存在，但 proc_cmd_unlocked() 没有对应解析分支。"],
+      "SourceLine": 29
+    },
+    {
+      "Key": "setall",
+      "Status": "unimplemented",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$SETALL,<...>",
+      "Examples": [],
+      "Parameters": [],
+      "SuccessResponse": null,
+      "ErrorResponses": ["$>ERR,ARG\\r\\n"],
+      "Notes": ["只打印参数后继续走错误路径，没有稳定的控制或响应协议。"],
+      "SourceLine": 970
+    },
+    {
+      "Key": "unregistered_macros",
+      "Status": "unimplemented",
+      "IncludeInDefaultImport": false,
+      "PayloadTemplate": "$GETINFO, / $TOARRAY, / $TOTEST,",
+      "Examples": [],
+      "Parameters": [],
+      "SuccessResponse": null,
+      "ErrorResponses": ["通常落入 $>ERR,ARG\\r\\n"],
+      "Notes": ["宏定义存在但没有命令处理分支。"],
+      "SourceLine": 18
+    }
+  ],
+  "DeviceToDisplayEvents": [
+    {
+      "PayloadTemplate": "$LCD,FREQ_GHZ,<freq_ghz>",
+      "Direction": "device_to_display",
+      "IncludeInHostCommandGroups": false,
+      "Notes": ["SET2595 成功后由主控主动推送，不是上位机设置命令。"]
+    },
+    {
+      "PayloadTemplate": "$LCD,GAIN,<att_db>",
+      "Direction": "device_to_display",
+      "IncludeInHostCommandGroups": false,
+      "Notes": ["SETBUCAMP 成功后由主控主动推送，不是上位机设置命令。"]
+    },
+    {
+      "PayloadTemplate": "$LCD,10M,<0|1>",
+      "Direction": "device_to_display",
+      "IncludeInHostCommandGroups": false,
+      "Notes": ["SET10MSEL 成功后由主控主动推送。"]
+    },
+    {
+      "PayloadTemplate": "$LCD,IF,<freq_mhz>",
+      "Direction": "device_to_display",
+      "IncludeInHostCommandGroups": false,
+      "Notes": ["中频设置成功后由主控主动推送。"]
+    }
+  ],
+  "ValidationChecklist": [
+    "根对象 SchemaVersion 等于 1，不能生成数组根。",
+    "单文件默认使用 WorkspaceMode=Serial、Transport.$type=serial、Kind=Serial；CommandGroups 必须同时包含 Category=Serial 和 Category=Tcp。",
+    "Serial 与 Tcp 两组的 Payload 集合必须一致；切换到 Network 工作页后，在软件传输设置中选择 Udp、RemotePort 使用 10071。",
+    "Terminal.EncodingName=ASCII，Terminal.LineEnding=CRLF，Terminal.SendAsHex=false，Terminal.ReceiveAsHex=false。",
+    "每个命令 Payload 和 Template 不含 CR/LF，Command.LineEnding=CRLF，Checksum=None。",
+    "含参数的 Template 必须使用完整 ${name} 语法，变量名必须同时出现在 Variables 或每个 VariableSet 中；禁止使用 <name>、${name 或其他不完整占位符。",
+    "SET2595 频率在 9.29~11.59 GHz，功率码在 0~63。",
+    "SETIFFREQ 只能是 70、720、1200；SETVC 只能是 0、1。",
+    "所有衰减值在 0~31.75 dB 且为 0.25 dB 步进。",
+    "SETPOWER 的 rail 只能是 BUC2、PA6V、BUCS10V5、LNB1、BUCS6V。",
+    "SETIP、SETNETMASK、SETGATEWAY 示例都必须是四段合法 IPv4。",
+    "源码中固定返回错误的历史命令、占位命令和未实现宏不得进入默认上位机命令组。",
+    "不把 LCD 事件和未实现宏放进默认上位机命令组。"
+  ]
+}

@@ -174,9 +174,25 @@ public static partial class ByteText
     public static string ExpandVariables(string input, IReadOnlyDictionary<string, string> variables) =>
         VariableRegex().Replace(input, match => variables.TryGetValue(match.Groups[1].Value, out string? value) ? value : match.Value);
 
+    public static IReadOnlyList<string> GetVariableNames(string input)
+    {
+        List<string> names = [];
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in VariableRegex().Matches(input))
+        {
+            string name = match.Groups[1].Value;
+            if (seen.Add(name))
+            {
+                names.Add(name);
+            }
+        }
+
+        return names;
+    }
+
     [GeneratedRegex(@"[^0-9A-Fa-f]")]
     private static partial Regex NonHexSeparatorRegex();
 
-    [GeneratedRegex(@"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")]
+    [GeneratedRegex(@"(?:\$\{|&\{)([\p{L}\p{Nl}_][\p{L}\p{Nl}\p{M}\p{N}_]*)\}")]
     private static partial Regex VariableRegex();
 }

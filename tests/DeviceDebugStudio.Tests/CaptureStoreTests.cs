@@ -19,6 +19,7 @@ public sealed class CaptureStoreTests
             await store.AppendAsync(new TransportPacket(DateTimeOffset.Now, PacketDirection.Send, [4, 5], "COM1"));
             await store.CompleteAsync();
 
+            Assert.Equal(0, store.DroppedPacketCount);
             Assert.NotNull(store.FilePath);
             await using (SqliteConnection connection = new($"Data Source={store.FilePath};Pooling=False"))
             {
@@ -56,6 +57,7 @@ public sealed class CaptureStoreTests
             await store.AppendAsync(new TransportPacket(firstTimestamp.AddSeconds(1), PacketDirection.Send, [0x30], "127.0.0.1:8000", "发送"));
             await store.CompleteAsync();
 
+            Assert.Equal(0, store.DroppedPacketCount);
             CaptureOpenResult result = await new CaptureFileReader().ReadAsync(Assert.IsType<string>(store.FilePath));
 
             Assert.Equal(2, result.TotalPackets);

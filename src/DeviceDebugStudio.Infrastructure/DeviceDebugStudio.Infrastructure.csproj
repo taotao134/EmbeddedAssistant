@@ -14,4 +14,7 @@
     <PackageReference Include="System.IO.Ports" />
     <PackageReference Include="System.Management" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DeviceDebugStudio.Tests" />
+  </ItemGroup>
 </Project>

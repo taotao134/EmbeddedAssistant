@@ -8,6 +8,7 @@ namespace DeviceDebugStudio.Core.Sessions;
 
 public interface ICaptureStore : IAsyncDisposable
 {
+    long DroppedPacketCount { get; }
     Task StartAsync(string sessionName, TransportKind transportKind, CancellationToken cancellationToken = default);
     ValueTask AppendAsync(TransportPacket packet, CancellationToken cancellationToken = default);
     Task CompleteAsync(CancellationToken cancellationToken = default);
@@ -15,6 +16,7 @@ public interface ICaptureStore : IAsyncDisposable
 
 public sealed class NullCaptureStore : ICaptureStore
 {
+    public long DroppedPacketCount => 0;
     public Task StartAsync(string sessionName, TransportKind transportKind, CancellationToken cancellationToken = default) => Task.CompletedTask;
     public ValueTask AppendAsync(TransportPacket packet, CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
     public Task CompleteAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
@@ -39,7 +41,7 @@ public sealed class CommunicationSession : IAsyncDisposable
         _captureStore = captureStore ?? new NullCaptureStore();
         _displayChannel = Channel.CreateBounded<TransportPacket>(new BoundedChannelOptions(displayCapacity)
         {
-            FullMode = BoundedChannelFullMode.DropWrite,
+            FullMode = BoundedChannelFullMode.Wait,
             SingleReader = false,
             SingleWriter = false
         });
@@ -49,6 +51,7 @@ public sealed class CommunicationSession : IAsyncDisposable
     public string Name { get; }
     public ITransport Transport => _transport;
     public long DisplayDropCount => Interlocked.Read(ref _displayDropCount);
+    public long CaptureDropCount => _captureStore.DroppedPacketCount;
     public event EventHandler<Exception>? Faulted;
 
     public async Task ConnectAsync(CancellationToken cancellationToken = default)

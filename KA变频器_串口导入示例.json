@@ -1,0 +1,121 @@
+{
+  "SchemaVersion": 1,
+  "Id": "a0000000-0000-4000-8000-000000000002",
+  "Name": "KA变频器 串口",
+  "Description": "根据 D:\\bj_hmt\\ka_earth_station\\tj_ka_up_converter\\Up_Converter_192.168.1.10\\src\\proc_cmd.c 生成的 DeviceDebugStudio 串口导入示例。USART1/USART3 均为 115200, 8N1；PortName 留空，导入后选择实际 COM 口。",
+  "WorkspaceMode": "Serial",
+  "Transport": {
+    "$type": "serial",
+    "PortName": "",
+    "BaudRate": 115200,
+    "DataBits": 8,
+    "Parity": "None",
+    "StopBits": "One",
+    "Handshake": "None",
+    "DtrEnable": false,
+    "RtsEnable": false,
+    "Kind": "Serial",
+    "AutoReconnect": false
+  },
+  "Terminal": {
+    "EncodingName": "ASCII",
+    "QuickCommandDataFormat": "按指令",
+    "SendAsHex": false,
+    "ReceiveAsHex": false,
+    "ShowTimestamp": true,
+    "LineEnding": "CRLF",
+    "SendRepeatIntervalMs": 1000,
+    "ReceiveTimeoutMs": 20,
+    "UiRecordLimit": 100000
+  },
+  "CommandGroups": [
+    {
+      "Name": "状态查询",
+      "Category": "Serial",
+      "Commands": [
+        { "Id": "c0000000-0000-4000-8000-000000000001", "Name": "查询状态", "Payload": "$GETSTATUS", "Template": "$GETSTATUS", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000002", "Name": "查询中频", "Payload": "$GETIFFREQ", "Template": "$GETIFFREQ", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000003", "Name": "查询风扇", "Payload": "$GETFAN", "Template": "$GETFAN", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000004", "Name": "查询10MHz", "Payload": "$GET10M", "Template": "$GET10M", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000005", "Name": "查询射频状态", "Payload": "$GETRFSTATE", "Template": "$GETRFSTATE", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000006", "Name": "查询电源", "Payload": "$GETPOWER", "Template": "$GETPOWER", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000007", "Name": "查询诊断", "Payload": "$GETDIAG", "Template": "$GETDIAG", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000008", "Name": "查询IP", "Payload": "$GETIP", "Template": "$GETIP", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null }
+      ]
+    },
+    {
+      "Name": "频率与中频",
+      "Category": "Serial",
+      "Commands": [
+        { "Id": "c0000000-0000-4000-8000-000000000009", "Name": "设置LMX2595本振 9.690GHz", "Payload": "$SET2595,9.690000,30", "Template": "$SET2595,9.690000,30", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000010", "Name": "设置IF 720MHz", "Payload": "$SETIFFREQ,720", "Template": "$SETIFFREQ,720", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000011", "Name": "设置VC 1", "Payload": "$SETVC,1", "Template": "$SETVC,1", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null }
+      ]
+    },
+    {
+      "Name": "衰减控制",
+      "Category": "Serial",
+      "Commands": [
+        { "Id": "c0000000-0000-4000-8000-000000000012", "Name": "设置BUC衰减 10dB", "Payload": "$SETBUCAMP,10.00", "Template": "$SETBUCAMP,10.00", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000013", "Name": "设置LNB1衰减 10dB", "Payload": "$SETLNBAMP,1,10.00", "Template": "$SETLNBAMP,1,10.00", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000014", "Name": "设置LNB2衰减 10dB", "Payload": "$SETLNBAMP,2,10.00", "Template": "$SETLNBAMP,2,10.00", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null }
+      ]
+    },
+    {
+      "Name": "电源与参考源",
+      "Category": "Serial",
+      "Commands": [
+        { "Id": "c0000000-0000-4000-8000-000000000015", "Name": "设置PA6V", "Payload": "$SETPA6V,1", "Template": "$SETPA6V,1", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000016", "Name": "设置PA6V电源轨", "Payload": "$SETPOWER,PA6V,1", "Template": "$SETPOWER,PA6V,1", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000017", "Name": "打开外部10MHz", "Payload": "$SET10M,1", "Template": "$SET10M,1", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000018", "Name": "关闭外部10MHz", "Payload": "$SET10M,0", "Template": "$SET10M,0", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000019", "Name": "选择外部10MHz", "Payload": "$SET10MSEL,1", "Template": "$SET10MSEL,1", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null }
+      ]
+    },
+    {
+      "Name": "网络参数",
+      "Category": "Serial",
+      "Commands": [
+        { "Id": "c0000000-0000-4000-8000-000000000020", "Name": "保存IP 192.168.1.10", "Payload": "$SETIP,192,168,1,10", "Template": "$SETIP,192,168,1,10", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000021", "Name": "保存子网掩码", "Payload": "$SETNETMASK,255,255,255,0", "Template": "$SETNETMASK,255,255,255,0", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null },
+        { "Id": "c0000000-0000-4000-8000-000000000022", "Name": "保存网关 192.168.1.1", "Payload": "$SETGATEWAY,192,168,1,1", "Template": "$SETGATEWAY,192,168,1,1", "IsHex": false, "LineEnding": "CRLF", "Checksum": "None", "ChecksumLittleEndian": true, "RepeatIntervalMs": 1000, "RepeatEnabled": false, "Shortcut": "", "UsageCount": 0, "LastUsedAt": null, "IsPinned": false, "PinnedOrder": 0, "NameColumnWeight": 132, "PayloadColumnWeight": 300, "Variables": [], "VariableSets": [], "SelectedVariableSetId": null }
+      ]
+    }
+  ],
+  "FrameTemplate": {
+    "Name": "KA 文本命令",
+    "MatchOffset": -1,
+    "MatchHex": "",
+    "Mode": "Raw",
+    "DelimiterHex": "0D 0A",
+    "FixedLength": 8,
+    "LengthOffset": 1,
+    "LengthSize": 1,
+    "LengthAdjustment": 0,
+    "LittleEndian": true,
+    "IdleGapMs": 20,
+    "Escape": "None",
+    "Checksum": "None",
+    "Fields": []
+  },
+  "FrameTemplates": [
+    {
+      "Name": "KA 文本命令",
+      "MatchOffset": -1,
+      "MatchHex": "",
+      "Mode": "Raw",
+      "DelimiterHex": "0D 0A",
+      "FixedLength": 8,
+      "LengthOffset": 1,
+      "LengthSize": 1,
+      "LengthAdjustment": 0,
+      "LittleEndian": true,
+      "IdleGapMs": 20,
+      "Escape": "None",
+      "Checksum": "None",
+      "Fields": []
+    }
+  ],
+  "ChartBindings": [],
+  "UpdatedAt": "2026-08-04T00:00:00+08:00"
+}

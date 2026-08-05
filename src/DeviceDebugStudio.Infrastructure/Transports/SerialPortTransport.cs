@@ -25,10 +25,20 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
     private const byte PortOpenedMessage = 2;
     private const byte ReceivedDataMessage = 3;
     private const byte WorkerErrorMessage = 4;
+    private const byte WorkerHeartbeatMessage = 5;
     private const byte SendDataCommand = 1;
     private const byte ClosePortCommand = 2;
+    private const int EventWriteTimeoutMilliseconds = 2000;
+    private const int WorkerHeartbeatIntervalMilliseconds = 1000;
+    private const int WorkerHeartbeatTimeoutMilliseconds = 3000;
+    private const int WorkerReadActivityTimeoutMilliseconds = 3000;
+    private const int WorkerHeartbeatSendFailureLimit = 3;
+    private const int MaxTransientReadRetryCount = 5;
+    private const int ReadLoopYieldDelayMilliseconds = 1;
+    private const int DebugLogMutexTimeoutMilliseconds = 100;
 
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly SemaphoreSlim _workerCleanupLock = new(1, 1);
     private readonly object _workerSync = new();
     private Process? _workerProcess;
     private NamedPipeServerStream? _commandPipe;
@@ -36,9 +46,19 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
     private CancellationTokenSource? _readCancellation;
     private Task? _readTask;
     private string? _diagnosticAttemptId;
+    private int _disconnectInProgress;
+    private long _lastWorkerHeartbeatUnixMs;
+    private long _lastWorkerReadActivityUnixMs;
+    private long _workerReceivedBytes;
+    private long _workerRetryCount;
+    private long _workerTimeoutStreak;
 
     public override string DisplayName => string.IsNullOrWhiteSpace(settings.PortName) ? "串口" : settings.PortName;
     public override TransportKind Kind => TransportKind.Serial;
+
+    public long WorkerReceivedBytes => Interlocked.Read(ref _workerReceivedBytes);
+    public long WorkerRetryCount => Interlocked.Read(ref _workerRetryCount);
+    public long WorkerTimeoutStreak => Interlocked.Read(ref _workerTimeoutStreak);
 
     protected override async Task OnConnectAsync(CancellationToken cancellationToken)
     {
@@ -54,6 +74,11 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
 
         string attemptId = Guid.NewGuid().ToString("N")[..12];
         _diagnosticAttemptId = attemptId;
+        Interlocked.Exchange(ref _lastWorkerHeartbeatUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Interlocked.Exchange(ref _lastWorkerReadActivityUnixMs, 0);
+        Interlocked.Exchange(ref _workerReceivedBytes, 0);
+        Interlocked.Exchange(ref _workerRetryCount, 0);
+        Interlocked.Exchange(ref _workerTimeoutStreak, 0);
         WriteDebugLog(
             attemptId,
             $"父进程开始连接：端口={settings.PortName}，波特率={settings.BaudRate}，数据位={settings.DataBits}，"
@@ -103,6 +128,7 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
                 throw new IOException("无法启动串口工作进程。");
             }
             WriteDebugLog(attemptId, $"父进程已启动工作进程：PID={workerProcess.Id}，路径={workerProcess.StartInfo.FileName}。");
+            workerProcess.Exited += (_, _) => OnWorkerProcessExited(attemptId, workerProcess);
 
             WriteDebugLog(attemptId, "父进程等待命令管道和事件管道连接。");
             Task connectPipesTask = Task.WhenAll(
@@ -152,6 +178,9 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
             _readTask = Task.Run(
                 () => ReadWorkerEventsAsync(eventPipe, readCancellation.Token),
                 CancellationToken.None);
+            _ = Task.Run(
+                () => WatchWorkerActivityAsync(attemptId, readCancellation.Token),
+                CancellationToken.None);
             WriteDebugLog(attemptId, $"父进程确认连接成功：工作进程 PID={workerProcess.Id}。");
         }
         catch (OperationCanceledException exception)
@@ -184,63 +213,82 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
     {
         string attemptId = _diagnosticAttemptId ?? "无连接编号";
         WriteDebugLog(attemptId, "父进程开始断开串口连接。");
-        CancellationTokenSource? readCancellation = Interlocked.Exchange(ref _readCancellation, null);
-        readCancellation?.Cancel();
-
-        Process? workerProcess;
-        NamedPipeServerStream? commandPipe;
-        NamedPipeServerStream? eventPipe;
-        Task? readTask = Interlocked.Exchange(ref _readTask, null);
-        lock (_workerSync)
+        Interlocked.Exchange(ref _disconnectInProgress, 1);
+        try
         {
-            workerProcess = _workerProcess;
-            commandPipe = _commandPipe;
-            eventPipe = _eventPipe;
-            _workerProcess = null;
-            _commandPipe = null;
-            _eventPipe = null;
-        }
-
-        if (workerProcess is not null && commandPipe is not null && eventPipe is not null)
-        {
+            Process? workerProcess;
+            NamedPipeServerStream? commandPipe;
+            NamedPipeServerStream? eventPipe;
+            Task? readTask;
+            CancellationTokenSource? readCancellation;
+            await _workerCleanupLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (commandPipe.IsConnected)
+                readCancellation = Interlocked.Exchange(ref _readCancellation, null);
+                readCancellation?.Cancel();
+                readTask = Interlocked.Exchange(ref _readTask, null);
+                lock (_workerSync)
                 {
-                    WriteDebugLog(attemptId, "父进程发送关闭串口命令。");
-                    await WriteFrameAsync(commandPipe, ClosePortCommand, ReadOnlyMemory<byte>.Empty, cancellationToken)
-                        .ConfigureAwait(false);
+                    workerProcess = _workerProcess;
+                    commandPipe = _commandPipe;
+                    eventPipe = _eventPipe;
+                    _workerProcess = null;
+                    _commandPipe = null;
+                    _eventPipe = null;
                 }
             }
-            catch (Exception exception)
+            finally
             {
-                WriteDebugLog(attemptId, "父进程发送关闭串口命令失败，继续清理工作进程。", exception);
+                _workerCleanupLock.Release();
             }
 
-            await TerminateWorkerAsync(attemptId, workerProcess, commandPipe, eventPipe, allowGracefulExit: true)
-                .ConfigureAwait(false);
+            if (workerProcess is not null && commandPipe is not null && eventPipe is not null)
+            {
+                try
+                {
+                    if (commandPipe.IsConnected)
+                    {
+                        WriteDebugLog(attemptId, "父进程发送关闭串口命令。");
+                        await WriteFrameAsync(commandPipe, ClosePortCommand, ReadOnlyMemory<byte>.Empty, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    WriteDebugLog(attemptId, "父进程发送关闭串口命令失败，继续清理工作进程。", exception);
+                }
+
+                await TerminateWorkerAsync(attemptId, workerProcess, commandPipe, eventPipe, allowGracefulExit: true)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                commandPipe?.Dispose();
+                eventPipe?.Dispose();
+                workerProcess?.Dispose();
+            }
+
+            if (readTask is not null)
+            {
+                try
+                {
+                    await readTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+
+            readCancellation?.Dispose();
+            _diagnosticAttemptId = null;
+            Interlocked.Exchange(ref _lastWorkerHeartbeatUnixMs, 0);
+            Interlocked.Exchange(ref _lastWorkerReadActivityUnixMs, 0);
+            WriteDebugLog(attemptId, "父进程断开流程结束。");
         }
-        else
+        finally
         {
-            commandPipe?.Dispose();
-            eventPipe?.Dispose();
-            workerProcess?.Dispose();
+            Interlocked.Exchange(ref _disconnectInProgress, 0);
         }
-
-        if (readTask is not null)
-        {
-            try
-            {
-                await readTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }
-
-        readCancellation?.Dispose();
-        _diagnosticAttemptId = null;
-        WriteDebugLog(attemptId, "父进程断开流程结束。");
     }
 
     public override async ValueTask SendAsync(
@@ -337,6 +385,13 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
                 {
                     case ReceivedDataMessage when frame.Payload.Length > 0:
                         PublishReceived(frame.Payload, settings.PortName);
+                        MarkWorkerHeartbeatActivity();
+                        break;
+                    case WorkerHeartbeatMessage:
+                        if (ApplyWorkerHeartbeat(frame.Payload))
+                        {
+                            MarkWorkerHeartbeatActivity();
+                        }
                         break;
                     case WorkerErrorMessage:
                         ReportFault(new IOException($"串口 {settings.PortName} 读取失败：{DecodeMessage(frame.Payload)}"));
@@ -359,6 +414,164 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
         {
             WriteDebugLog(_diagnosticAttemptId ?? "无连接编号", "父进程读取工作进程事件失败。", exception);
             ReportFault(new IOException($"串口 {settings.PortName} 通信失败：{exception.Message}", exception));
+        }
+    }
+
+    private bool ApplyWorkerHeartbeat(byte[] payload)
+    {
+        if (!TryParseWorkerHeartbeat(payload, out WorkerHeartbeatSnapshot? snapshot) || snapshot is null)
+        {
+            WriteDebugLog(_diagnosticAttemptId ?? "无连接编号", $"工作进程心跳格式无效：{DecodeMessage(payload)}");
+            return false;
+        }
+
+        Interlocked.Exchange(ref _workerReceivedBytes, snapshot.ReceivedBytes);
+        Interlocked.Exchange(ref _workerRetryCount, snapshot.TransientRetryCount);
+        Interlocked.Exchange(ref _workerTimeoutStreak, snapshot.TimeoutStreak);
+        Interlocked.Exchange(ref _lastWorkerReadActivityUnixMs, snapshot.ReadLoopActivityUnixMs);
+        WriteDebugLog(
+            _diagnosticAttemptId ?? "无连接编号",
+            $"工作进程心跳：PID={snapshot.ProcessId}，串口打开={snapshot.PortOpen}，读取循环活动={snapshot.ReadLoopActivityUnixMs} ms，"
+                + $"最后成功读取={snapshot.LastSuccessfulReadUnixMs} ms，"
+                + $"累计接收={snapshot.ReceivedBytes} B，连续超时={snapshot.TimeoutStreak}，累计重试={snapshot.TransientRetryCount}。");
+        return true;
+    }
+
+    private async Task WatchWorkerActivityAsync(string attemptId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(WorkerHeartbeatIntervalMilliseconds, cancellationToken).ConfigureAwait(false);
+                long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                long lastHeartbeat = Interlocked.Read(ref _lastWorkerHeartbeatUnixMs);
+                long lastReadActivity = Interlocked.Read(ref _lastWorkerReadActivityUnixMs);
+                string? failureReason = GetWorkerFailureReason(now, lastHeartbeat, lastReadActivity);
+                long heartbeatIdleMilliseconds = lastHeartbeat <= 0 ? long.MaxValue : now - lastHeartbeat;
+                long readIdleMilliseconds = lastReadActivity <= 0 ? 0 : now - lastReadActivity;
+
+                if (failureReason is not null && State == TransportState.Connected)
+                {
+                    WriteDebugLog(
+                        attemptId,
+                        $"父进程检测到工作进程故障：心跳空闲={heartbeatIdleMilliseconds} ms，读取循环空闲={readIdleMilliseconds} ms，"
+                            + failureReason);
+                    await FailWorkerAsync(attemptId, failureReason).ConfigureAwait(false);
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            WriteDebugLog(attemptId, "父进程心跳监视任务异常。", exception);
+        }
+    }
+
+    private void MarkWorkerHeartbeatActivity() =>
+        Interlocked.Exchange(ref _lastWorkerHeartbeatUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+    internal static string? GetWorkerFailureReason(
+        long nowUnixMilliseconds,
+        long lastHeartbeatUnixMilliseconds,
+        long lastReadActivityUnixMilliseconds)
+    {
+        long heartbeatIdleMilliseconds = lastHeartbeatUnixMilliseconds <= 0
+            ? long.MaxValue
+            : nowUnixMilliseconds - lastHeartbeatUnixMilliseconds;
+        if (heartbeatIdleMilliseconds > WorkerHeartbeatTimeoutMilliseconds)
+        {
+            return $"串口工作进程心跳超时（{heartbeatIdleMilliseconds / 1000.0:N1} 秒无响应），已停止接收。";
+        }
+
+        long readIdleMilliseconds = lastReadActivityUnixMilliseconds <= 0
+            ? 0
+            : nowUnixMilliseconds - lastReadActivityUnixMilliseconds;
+        return readIdleMilliseconds > WorkerReadActivityTimeoutMilliseconds
+            ? $"串口读取循环疑似卡死（{readIdleMilliseconds / 1000.0:N1} 秒无活动），已停止接收。"
+            : null;
+    }
+
+    private void OnWorkerProcessExited(string attemptId, Process workerProcess)
+    {
+        lock (_workerSync)
+        {
+            if (!ReferenceEquals(_workerProcess, workerProcess))
+            {
+                WriteDebugLog(attemptId, $"父进程忽略旧工作进程退出事件：PID={TryGetProcessId(workerProcess)}。");
+                return;
+            }
+        }
+
+        int exitCode = TryGetExitCode(workerProcess);
+        WriteDebugLog(
+            attemptId,
+            $"父进程收到工作进程退出事件：PID={TryGetProcessId(workerProcess)}，退出码={exitCode}，"
+                + $"连接状态={State}。");
+        if (_disconnectInProgress != 0 || _readCancellation is null)
+        {
+            return;
+        }
+
+        _ = FailWorkerAsync(attemptId, $"串口工作进程已退出（退出码={exitCode}）。");
+    }
+
+    private async Task FailWorkerAsync(string attemptId, string reason)
+    {
+        WriteDebugLog(attemptId, $"父进程判定串口工作进程故障：{reason}");
+        ReportFault(new IOException(reason));
+        await _workerCleanupLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            CancellationTokenSource? readCancellation = Interlocked.Exchange(ref _readCancellation, null);
+            readCancellation?.Cancel();
+            Task? readTask = Interlocked.Exchange(ref _readTask, null);
+            Process? workerProcess;
+            NamedPipeServerStream? commandPipe;
+            NamedPipeServerStream? eventPipe;
+            lock (_workerSync)
+            {
+                workerProcess = _workerProcess;
+                commandPipe = _commandPipe;
+                eventPipe = _eventPipe;
+                _workerProcess = null;
+                _commandPipe = null;
+                _eventPipe = null;
+            }
+
+            if (workerProcess is not null && commandPipe is not null && eventPipe is not null)
+            {
+                await TerminateWorkerAsync(attemptId, workerProcess, commandPipe, eventPipe).ConfigureAwait(false);
+            }
+            else
+            {
+                commandPipe?.Dispose();
+                eventPipe?.Dispose();
+                workerProcess?.Dispose();
+            }
+
+            if (readTask is not null)
+            {
+                try
+                {
+                    await readTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+
+            readCancellation?.Dispose();
+            _diagnosticAttemptId = null;
+            Interlocked.Exchange(ref _lastWorkerHeartbeatUnixMs, 0);
+            Interlocked.Exchange(ref _lastWorkerReadActivityUnixMs, 0);
+        }
+        finally
+        {
+            _workerCleanupLock.Release();
         }
     }
 
@@ -571,45 +784,74 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
                 .ConfigureAwait(false);
 
             using SemaphoreSlim eventWriteLock = new(1, 1);
+            SerialReadStats readStats = new();
+            Task commandTask = RunCommandLoopAsync(commandPipe, port, attemptId, workerCancellation.Token);
             Task readTask = Task.Run(
-                () => ReadSerialInWorkerAsync(port, eventPipe, eventWriteLock, workerCancellation.Token),
+                () => ReadSerialInWorkerAsync(new SerialPortReadSource(port), eventPipe, eventWriteLock, readStats, attemptId, workerCancellation.Token),
+                CancellationToken.None);
+            Task heartbeatTask = Task.Run(
+                () => RunHeartbeatLoopAsync(port, eventPipe, eventWriteLock, readStats, attemptId, workerCancellation.Token),
                 CancellationToken.None);
             try
             {
-                while (!workerCancellation.IsCancellationRequested)
+                Task completed = await Task.WhenAny(commandTask, readTask, heartbeatTask).ConfigureAwait(false);
+                if (workerCancellation.IsCancellationRequested)
                 {
-                    WorkerFrame command = await ReadFrameAsync(commandPipe, workerCancellation.Token).ConfigureAwait(false);
-                    switch (command.Kind)
+                    WriteDebugLog(attemptId, "工作进程因取消而结束主循环（正常关闭路径）。");
+                }
+                else if (completed == commandTask && commandTask.Status == TaskStatus.RanToCompletion)
+                {
+                    WriteDebugLog(attemptId, "工作进程命令循环正常结束（收到关闭命令）。");
+                }
+                else
+                {
+                    string failureMessage;
+                    Exception? failureException;
+                    if (completed == commandTask && ContainsException(commandTask.Exception, typeof(EndOfStreamException)))
                     {
-                        case SendDataCommand:
-                            if (command.Payload.Length > 0)
-                            {
-                                port.Write(command.Payload, 0, command.Payload.Length);
-                            }
-                            break;
-                        case ClosePortCommand:
-                            WriteDebugLog(attemptId, "工作进程收到关闭串口命令。");
-                            return;
-                        default:
-                            throw new IOException("收到未知的串口工作进程命令。");
+                        WriteDebugLog(attemptId, "工作进程命令管道已关闭（父进程侧断开），按正常结束处理。");
                     }
-                }
-            }
-            catch (EndOfStreamException)
-            {
-                WriteDebugLog(attemptId, "工作进程命令管道已关闭。");
-            }
-            catch (Exception exception) when (!workerCancellation.IsCancellationRequested)
-            {
-                WriteDebugLog(attemptId, "工作进程命令循环异常。", exception);
-                await eventWriteLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-                try
-                {
-                    await TryWriteWorkerErrorAsync(eventPipe, exception.Message, CancellationToken.None).ConfigureAwait(false);
-                }
-                finally
-                {
-                    eventWriteLock.Release();
+                    else if (completed == readTask)
+                    {
+                        failureException = readTask.Exception?.GetBaseException();
+                        WriteDebugLog(attemptId, "工作进程串口读取任务异常或意外结束。", failureException);
+                        failureMessage = failureException is null
+                            ? "串口读取循环意外提前结束。"
+                            : $"串口读取循环异常终止：{failureException.Message}";
+                        await FailWorkerSelfAsync(
+                                eventPipe,
+                                eventWriteLock,
+                                failureMessage,
+                                attemptId,
+                                workerCancellation)
+                            .ConfigureAwait(false);
+                    }
+                    else if (completed == heartbeatTask)
+                    {
+                        failureException = heartbeatTask.Exception?.GetBaseException();
+                        WriteDebugLog(attemptId, "工作进程心跳循环异常结束。", failureException);
+                        failureMessage = $"串口工作进程心跳发送失败：{failureException?.Message ?? "未知异常"}";
+                        await FailWorkerSelfAsync(
+                                eventPipe,
+                                eventWriteLock,
+                                failureMessage,
+                                attemptId,
+                                workerCancellation)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        failureException = commandTask.Exception?.GetBaseException();
+                        WriteDebugLog(attemptId, "工作进程命令循环异常结束。", failureException);
+                        failureMessage = $"串口工作进程命令循环异常：{failureException?.Message ?? "未知异常"}";
+                        await FailWorkerSelfAsync(
+                                eventPipe,
+                                eventWriteLock,
+                                failureMessage,
+                                attemptId,
+                                workerCancellation)
+                            .ConfigureAwait(false);
+                    }
                 }
             }
             finally
@@ -634,15 +876,10 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
                         exception);
                 }
 
-                try
-                {
-                    await readTask.ConfigureAwait(false);
-                    WriteDebugLog(attemptId, "工作进程串口读取任务已结束。");
-                }
-                catch (Exception exception)
-                {
-                    WriteDebugLog(attemptId, "工作进程等待串口读取任务结束时发生异常。", exception);
-                }
+                await AwaitTaskQuietlyAsync(attemptId, "命令循环", commandTask).ConfigureAwait(false);
+                await AwaitTaskQuietlyAsync(attemptId, "串口读取循环", readTask).ConfigureAwait(false);
+                await AwaitTaskQuietlyAsync(attemptId, "心跳循环", heartbeatTask).ConfigureAwait(false);
+                WriteDebugLog(attemptId, "工作进程三个循环均已结束。");
             }
         }
     }
@@ -671,62 +908,471 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
             WriteTimeout = 1000
         };
 
-    private static async Task ReadSerialInWorkerAsync(
+    private static async Task RunCommandLoopAsync(
+        NamedPipeClientStream commandPipe,
         SerialPort port,
+        string attemptId,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            WorkerFrame command = await ReadFrameAsync(commandPipe, cancellationToken).ConfigureAwait(false);
+            switch (command.Kind)
+            {
+                case SendDataCommand:
+                    if (command.Payload.Length > 0)
+                    {
+                        port.Write(command.Payload, 0, command.Payload.Length);
+                    }
+                    break;
+                case ClosePortCommand:
+                    WriteDebugLog(attemptId, "工作进程收到关闭串口命令。");
+                    return;
+                default:
+                    throw new IOException("收到未知的串口工作进程命令。");
+            }
+        }
+    }
+
+    internal interface ISerialPortReadSource
+    {
+        int Read(byte[] buffer, int offset, int count);
+        bool IsOpen { get; }
+        int ReadTimeout { get; }
+    }
+
+    private sealed class SerialPortReadSource(SerialPort port) : ISerialPortReadSource
+    {
+        public int Read(byte[] buffer, int offset, int count) => port.Read(buffer, offset, count);
+        public bool IsOpen => port.IsOpen;
+        public int ReadTimeout => port.ReadTimeout;
+    }
+
+    internal static async Task ReadSerialInWorkerAsync(
+        ISerialPortReadSource port,
         Stream eventPipe,
         SemaphoreSlim eventWriteLock,
+        SerialReadStats stats,
+        string attemptId,
         CancellationToken cancellationToken)
     {
         byte[] buffer = new byte[16 * 1024];
+        int transientFailureCount = 0;
+        int timeoutStreak = 0;
+        long lastSuccessfulReadLogTimestamp = 0;
+        WriteDebugLog(attemptId, $"工作进程串口读取循环启动：ReadTimeout={port.ReadTimeout} ms，缓冲区={buffer.Length} B。");
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
                 int count;
+                Interlocked.Exchange(
+                    ref stats.ReadLoopActivityUnixMs,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
                 try
                 {
                     count = port.Read(buffer, 0, buffer.Length);
                 }
                 catch (TimeoutException)
                 {
+                    timeoutStreak++;
+                    Interlocked.Exchange(ref stats.TimeoutStreak, timeoutStreak);
+                    await Task.Delay(ReadLoopYieldDelayMilliseconds, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+                catch (Exception exception) when (TransientReadRetryPolicy.IsTransient(exception))
+                {
+                    transientFailureCount++;
+                    Interlocked.Increment(ref stats.TransientRetryCount);
+                    int delay = TransientReadRetryPolicy.GetRetryDelay(transientFailureCount);
+                    WriteDebugLog(
+                        attemptId,
+                        $"工作进程串口读取返回瞬时异常：第 {transientFailureCount}/{MaxTransientReadRetryCount} 次，"
+                            + $"退避={delay} ms，串口仍打开={port.IsOpen}。",
+                        exception);
+                    if (transientFailureCount >= MaxTransientReadRetryCount || !port.IsOpen)
+                    {
+                        throw new IOException(
+                            $"串口读取连续失败 {transientFailureCount} 次（驱动返回瞬时中止）：{exception.Message}",
+                            exception);
+                    }
+
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
+                transientFailureCount = 0;
+                timeoutStreak = 0;
+                Interlocked.Exchange(ref stats.TimeoutStreak, 0);
                 if (count <= 0)
                 {
+                    await Task.Delay(ReadLoopYieldDelayMilliseconds, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
-                await eventWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-                try
+                long totalBytes = Interlocked.Add(ref stats.TotalBytes, count);
+                long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                Interlocked.Exchange(ref stats.LastSuccessfulReadUnixMs, now);
+                if (now - lastSuccessfulReadLogTimestamp >= WorkerHeartbeatIntervalMilliseconds)
                 {
-                    await WriteFrameAsync(
-                        eventPipe,
-                        ReceivedDataMessage,
-                        buffer.AsMemory(0, count),
-                        cancellationToken).ConfigureAwait(false);
+                    lastSuccessfulReadLogTimestamp = now;
+                    WriteDebugLog(attemptId, $"工作进程串口成功读取 {count} B，累计={totalBytes} B。");
                 }
-                finally
+
+                await WriteEventFrameWithTimeoutAsync(
+                    eventPipe,
+                    eventWriteLock,
+                    ReceivedDataMessage,
+                    buffer.AsMemory(0, count),
+                    attemptId,
+                    cancellationToken,
+                    EventWriteTimeoutMilliseconds).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception) when (cancellationToken.IsCancellationRequested)
+        {
+            WriteDebugLog(attemptId, "工作进程串口读取循环在取消中退出。", exception);
+        }
+    }
+
+    private static async Task RunHeartbeatLoopAsync(
+        SerialPort port,
+        Stream eventPipe,
+        SemaphoreSlim eventWriteLock,
+        SerialReadStats stats,
+        string attemptId,
+        CancellationToken cancellationToken)
+    {
+        int consecutiveSendFailures = 0;
+        WriteDebugLog(attemptId, "工作进程心跳循环启动。");
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await Task.Delay(WorkerHeartbeatIntervalMilliseconds, cancellationToken).ConfigureAwait(false);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            byte[] payload = BuildHeartbeatPayload(port, stats);
+            try
+            {
+                await WriteEventFrameWithTimeoutAsync(
+                    eventPipe,
+                    eventWriteLock,
+                    WorkerHeartbeatMessage,
+                    payload,
+                    attemptId,
+                    cancellationToken,
+                    EventWriteTimeoutMilliseconds).ConfigureAwait(false);
+                consecutiveSendFailures = 0;
+                WriteDebugLog(attemptId, $"工作进程心跳已发送：{DecodeMessage(payload)}");
+            }
+            catch (IOException exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                consecutiveSendFailures++;
+                WriteDebugLog(
+                    attemptId,
+                    $"工作进程心跳发送失败：连续 {consecutiveSendFailures}/{WorkerHeartbeatSendFailureLimit} 次。",
+                    exception);
+                if (consecutiveSendFailures >= WorkerHeartbeatSendFailureLimit)
                 {
-                    eventWriteLock.Release();
+                    throw new IOException("工作进程心跳连续发送失败，判定父进程或事件管道异常。", exception);
                 }
             }
         }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
+    }
+
+    private static byte[] BuildHeartbeatPayload(SerialPort port, SerialReadStats stats) => BuildHeartbeatPayload(
+        port.IsOpen,
+        Interlocked.Read(ref stats.LastSuccessfulReadUnixMs),
+        Interlocked.Read(ref stats.ReadLoopActivityUnixMs),
+        Interlocked.Read(ref stats.TotalBytes),
+        Interlocked.Read(ref stats.TimeoutStreak),
+        Interlocked.Read(ref stats.TransientRetryCount));
+
+    internal static byte[] BuildHeartbeatPayload(
+        bool portOpen,
+        long lastSuccessfulReadUnixMs,
+        long readLoopActivityUnixMs,
+        long receivedBytes,
+        long timeoutStreak,
+        long transientRetryCount)
+    {
+        StringBuilder builder = new();
+        builder.Append("pid=").Append(Environment.ProcessId)
+            .Append(";open=").Append(portOpen ? 1 : 0)
+            .Append(";lastReadMs=").Append(lastSuccessfulReadUnixMs)
+            .Append(";readLoopMs=").Append(readLoopActivityUnixMs)
+            .Append(";bytes=").Append(receivedBytes)
+            .Append(";timeouts=").Append(timeoutStreak)
+            .Append(";retries=").Append(transientRetryCount);
+        return Encoding.UTF8.GetBytes(builder.ToString());
+    }
+
+    internal sealed record WorkerHeartbeatSnapshot(
+        long ProcessId,
+        bool PortOpen,
+        long LastSuccessfulReadUnixMs,
+        long ReadLoopActivityUnixMs,
+        long ReceivedBytes,
+        long TimeoutStreak,
+        long TransientRetryCount);
+
+    internal static bool TryParseWorkerHeartbeat(byte[] payload, out WorkerHeartbeatSnapshot? snapshot)
+    {
+        snapshot = null;
+        string text = DecodeMessage(payload);
+        long? pid = null;
+        bool? portOpen = null;
+        long? lastReadMs = null;
+        long? readLoopMs = null;
+        long? bytes = null;
+        long? timeouts = null;
+        long? retries = null;
+        foreach (string segment in text.Split(';', StringSplitOptions.RemoveEmptyEntries))
         {
+            int separator = segment.IndexOf('=');
+            if (separator <= 0 || separator >= segment.Length - 1)
+            {
+                return false;
+            }
+
+            string key = segment[..separator];
+            string valueText = segment[(separator + 1)..];
+            switch (key)
+            {
+                case "pid" when long.TryParse(valueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value):
+                    pid = value;
+                    break;
+                case "open" when valueText is "0" or "1":
+                    portOpen = valueText == "1";
+                    break;
+                case "lastReadMs" when long.TryParse(valueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value):
+                    lastReadMs = value;
+                    break;
+                case "readLoopMs" when long.TryParse(valueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value):
+                    readLoopMs = value;
+                    break;
+                case "bytes" when long.TryParse(valueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value):
+                    bytes = value;
+                    break;
+                case "timeouts" when long.TryParse(valueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value):
+                    timeouts = value;
+                    break;
+                case "retries" when long.TryParse(valueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value):
+                    retries = value;
+                    break;
+            }
+        }
+
+        if (pid is null || portOpen is null || lastReadMs is null || readLoopMs is null || bytes is null || timeouts is null || retries is null)
+        {
+            return false;
+        }
+
+        snapshot = new WorkerHeartbeatSnapshot(
+            pid.Value,
+            portOpen.Value,
+            lastReadMs.Value,
+            readLoopMs.Value,
+            bytes.Value,
+            timeouts.Value,
+            retries.Value);
+        return true;
+    }
+
+    private static async Task FailWorkerSelfAsync(
+        Stream eventPipe,
+        SemaphoreSlim eventWriteLock,
+        string message,
+        string attemptId,
+        CancellationTokenSource workerCancellation)
+    {
+        WriteDebugLog(attemptId, $"工作进程判定自身故障，取消全部循环并报告：{message}");
+        workerCancellation.Cancel();
+        await SendWorkerErrorFrameAsync(eventPipe, eventWriteLock, message, attemptId, CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task SendWorkerErrorFrameAsync(
+        Stream eventPipe,
+        SemaphoreSlim eventWriteLock,
+        string message,
+        string attemptId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await WriteEventFrameWithTimeoutAsync(
+                eventPipe,
+                eventWriteLock,
+                WorkerErrorMessage,
+                Encoding.UTF8.GetBytes(message),
+                attemptId,
+                cancellationToken,
+                EventWriteTimeoutMilliseconds).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
-            await eventWriteLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-            try
+            WriteDebugLog(attemptId, "工作进程发送错误帧失败。", exception);
+        }
+    }
+
+    internal static async Task WriteEventFrameWithTimeoutAsync(
+        Stream eventPipe,
+        SemaphoreSlim eventWriteLock,
+        byte kind,
+        ReadOnlyMemory<byte> payload,
+        string attemptId,
+        CancellationToken cancellationToken,
+        int timeoutMilliseconds)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        bool lockAcquired = false;
+        long lockWaitMilliseconds = 0;
+        long writeMilliseconds = 0;
+        string? timeoutReason = null;
+        Exception? timeoutException = null;
+        try
+        {
+            lockAcquired = await eventWriteLock
+                .WaitAsync(TimeSpan.FromMilliseconds(timeoutMilliseconds), cancellationToken)
+                .ConfigureAwait(false);
+            lockWaitMilliseconds = stopwatch.ElapsedMilliseconds;
+            if (!lockAcquired)
             {
-                await TryWriteWorkerErrorAsync(eventPipe, exception.Message, CancellationToken.None).ConfigureAwait(false);
+                timeoutReason = $"事件管道写入超时（写锁等待超过 {timeoutMilliseconds} ms），父进程或管道异常。";
             }
-            finally
+            else
+            {
+                using CancellationTokenSource writeCancellation =
+                    CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                writeCancellation.CancelAfter(timeoutMilliseconds);
+                Stopwatch writeStopwatch = Stopwatch.StartNew();
+                try
+                {
+                    await WriteFrameAsync(eventPipe, kind, payload, writeCancellation.Token).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (
+                    writeCancellation.IsCancellationRequested
+                    && !cancellationToken.IsCancellationRequested)
+                {
+                    timeoutReason = $"事件管道写入超时（>{timeoutMilliseconds} ms），父进程或管道异常。";
+                    timeoutException = exception;
+                }
+
+                writeMilliseconds = writeStopwatch.ElapsedMilliseconds;
+            }
+        }
+        finally
+        {
+            if (lockAcquired)
             {
                 eventWriteLock.Release();
             }
         }
+
+        if (timeoutReason is not null)
+        {
+            WriteDebugLog(
+                attemptId,
+                $"{timeoutReason} 锁等待={lockWaitMilliseconds} ms，写入={writeMilliseconds} ms，帧类型={kind}。",
+                timeoutException);
+            throw new IOException(timeoutReason, timeoutException);
+        }
+
+        if (writeMilliseconds > 500 || lockWaitMilliseconds > 500)
+        {
+            WriteDebugLog(
+                attemptId,
+                $"事件管道写入偏慢：锁等待={lockWaitMilliseconds} ms，写入={writeMilliseconds} ms，帧类型={kind}。");
+        }
+    }
+
+    private static bool ContainsException(Exception? exception, Type type)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (type.IsInstanceOfType(current))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task AwaitTaskQuietlyAsync(string attemptId, string taskName, Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+            WriteDebugLog(attemptId, $"工作进程{taskName}已结束。");
+        }
+        catch (Exception exception)
+        {
+            WriteDebugLog(attemptId, $"工作进程等待{taskName}结束时发生异常。", exception);
+        }
+    }
+
+    private static int TryGetExitCode(Process process)
+    {
+        try
+        {
+            return process.ExitCode;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    internal sealed class SerialReadStats
+    {
+        public long TotalBytes;
+        public long LastSuccessfulReadUnixMs;
+        public long ReadLoopActivityUnixMs;
+        public long TransientRetryCount;
+        public long TimeoutStreak;
+    }
+
+    internal sealed class TransientReadRetryPolicy
+    {
+        private static readonly int[] DefaultRetryDelaysMilliseconds = [50, 100, 200, 400, 800];
+        private const int DefaultMaxRetryCount = 5;
+        private static readonly int OperationAbortedHResult = unchecked((int)0x800703E3);
+        private const int OperationAbortedNativeErrorCode = 995;
+
+        public static bool IsTransient(Exception exception)
+        {
+            if (exception is TimeoutException or OperationCanceledException)
+            {
+                return true;
+            }
+
+            for (Exception? current = exception; current is not null; current = current.InnerException)
+            {
+                if (current.HResult == OperationAbortedHResult)
+                {
+                    return true;
+                }
+
+                if (current is Win32Exception { NativeErrorCode: OperationAbortedNativeErrorCode })
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public static int GetRetryDelay(int retryCount) => DefaultRetryDelaysMilliseconds[
+            Math.Clamp(retryCount - 1, 0, DefaultRetryDelaysMilliseconds.Length - 1)];
+
+        public static int MaxRetryCount => DefaultMaxRetryCount;
     }
 
     private static async Task WatchParentProcessAsync(int parentProcessId, CancellationToken cancellationToken)
@@ -893,7 +1539,7 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
             mutex = new Mutex(false, DebugLogMutexName);
             try
             {
-                mutexAcquired = mutex.WaitOne(TimeSpan.FromSeconds(2));
+                mutexAcquired = mutex.WaitOne(TimeSpan.FromMilliseconds(DebugLogMutexTimeoutMilliseconds));
             }
             catch (AbandonedMutexException)
             {

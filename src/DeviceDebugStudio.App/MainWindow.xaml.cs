@@ -56,6 +56,8 @@ public partial class MainWindow : FluentWindow
     private static readonly Duration ThemeRevealDuration = new(TimeSpan.FromMilliseconds(100));
     private const double QuickCommandEditorMinHeight = 210;
     private const double QuickCommandEditorMaxHeight = 360;
+    private const int MaximumChartValues = 200_000;
+    private const int ChartValuesEvictionBatchSize = 1024;
 
     private readonly MainWindowViewModel _viewModel;
     private readonly DataLogger _chartLogger;
@@ -381,6 +383,10 @@ public partial class MainWindow : FluentWindow
     private void OnChartValueAdded(double value)
     {
         _chartValues.Add(value);
+        if (_chartValues.Count > MaximumChartValues + ChartValuesEvictionBatchSize)
+        {
+            _chartValues.RemoveRange(0, _chartValues.Count - MaximumChartValues);
+        }
         _chartLogger.Add(value);
         _chartDirty = true;
     }
@@ -1497,6 +1503,22 @@ public partial class MainWindow : FluentWindow
             textBox.Focus();
             textBox.SelectAll();
             e.Handled = true;
+        }
+    }
+
+    private void OnQuickCommandRepeatIntervalLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: QuickCommandItemViewModel command })
+        {
+            command.CommitRepeatIntervalText();
+        }
+    }
+
+    private void OnQuickParameterRepeatIntervalLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: QuickCommandItemViewModel command })
+        {
+            command.CommitParameterRepeatIntervalText();
         }
     }
 

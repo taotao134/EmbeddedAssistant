@@ -5,7 +5,7 @@ using DeviceDebugStudio.Core.Protocol;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
-using System.Text.RegularExpressions;
+using System.Globalization;
 using System.Windows;
 
 namespace DeviceDebugStudio.App.ViewModels;
@@ -19,7 +19,7 @@ public partial class QuickCommandItemViewModel : ObservableObject
         string initialPayload = ByteText.NormalizeSscomCommandText(command.Payload);
         string initialTemplate = ByteText.NormalizeSscomCommandText(
             string.IsNullOrEmpty(command.Template) ? initialPayload : command.Template);
-        if (!VariableRegex.IsMatch(initialTemplate))
+        if (ByteText.GetVariableNames(initialTemplate).Count == 0)
         {
             if (string.IsNullOrEmpty(initialPayload))
             {
@@ -33,7 +33,10 @@ public partial class QuickCommandItemViewModel : ObservableObject
         lineEnding = command.LineEnding;
         checksum = command.Checksum;
         checksumLittleEndian = command.ChecksumLittleEndian;
-        repeatIntervalMs = command.RepeatIntervalMs;
+        repeatIntervalMs = NormalizeInterval(command.RepeatIntervalMs);
+        repeatIntervalText = FormatInterval(repeatIntervalMs);
+        parameterRepeatIntervalMs = NormalizeInterval(command.ParameterRepeatIntervalMs);
+        parameterRepeatIntervalText = FormatInterval(parameterRepeatIntervalMs);
         shortcut = command.Shortcut;
         usageCount = command.UsageCount;
         lastUsedAt = command.LastUsedAt;
@@ -98,6 +101,15 @@ public partial class QuickCommandItemViewModel : ObservableObject
     private int repeatIntervalMs;
 
     [ObservableProperty]
+    private string repeatIntervalText = string.Empty;
+
+    [ObservableProperty]
+    private int parameterRepeatIntervalMs;
+
+    [ObservableProperty]
+    private string parameterRepeatIntervalText = string.Empty;
+
+    [ObservableProperty]
     private string shortcut;
 
     [ObservableProperty]
@@ -120,6 +132,9 @@ public partial class QuickCommandItemViewModel : ObservableObject
 
     [ObservableProperty]
     private bool isRepeating;
+
+    [ObservableProperty]
+    private bool isParameterRepeating;
 
     [ObservableProperty]
     private bool isDropTarget;
@@ -145,6 +160,18 @@ public partial class QuickCommandItemViewModel : ObservableObject
         LastUsedAt = DateTimeOffset.Now;
         OnPropertyChanged(nameof(UsageText));
         OnPropertyChanged(nameof(UsageShortText));
+    }
+
+    public void CommitRepeatIntervalText()
+    {
+        RepeatIntervalMs = ParseInterval(RepeatIntervalText, RepeatIntervalMs);
+        RepeatIntervalText = FormatInterval(RepeatIntervalMs);
+    }
+
+    public void CommitParameterRepeatIntervalText()
+    {
+        ParameterRepeatIntervalMs = ParseInterval(ParameterRepeatIntervalText, ParameterRepeatIntervalMs);
+        ParameterRepeatIntervalText = FormatInterval(ParameterRepeatIntervalMs);
     }
 
     [RelayCommand]
@@ -184,6 +211,7 @@ public partial class QuickCommandItemViewModel : ObservableObject
         Checksum = Checksum,
         ChecksumLittleEndian = ChecksumLittleEndian,
         RepeatIntervalMs = Math.Max(10, RepeatIntervalMs),
+        ParameterRepeatIntervalMs = Math.Clamp(ParameterRepeatIntervalMs, 10, 60_000),
         RepeatEnabled = false,
         Shortcut = Shortcut,
         UsageCount = UsageCount,
@@ -253,7 +281,7 @@ public partial class QuickCommandItemViewModel : ObservableObject
             OnPropertyChanged(nameof(Template));
         }
 
-        if (!VariableRegex.IsMatch(value) && !string.Equals(payload, value, StringComparison.Ordinal))
+        if (ByteText.GetVariableNames(value).Count == 0 && !string.Equals(payload, value, StringComparison.Ordinal))
         {
             payload = value;
             OnPropertyChanged(nameof(Payload));
@@ -265,20 +293,57 @@ public partial class QuickCommandItemViewModel : ObservableObject
     partial void OnSelectedVariableSetChanged(QuickCommandVariableSetItemViewModel? value) =>
         NotifyVariablePresentationChanged();
 
-    private IReadOnlyList<string> GetTemplateVariableNames()
+    partial void OnRepeatIntervalMsChanged(int value)
     {
-        List<string> names = [];
-        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
-        foreach (Match match in VariableRegex.Matches(Template))
+        int normalized = NormalizeInterval(value);
+        if (value != normalized)
         {
-            string name = match.Groups[1].Value;
-            if (seen.Add(name))
-            {
-                names.Add(name);
-            }
+            RepeatIntervalMs = normalized;
+            return;
         }
-        return names;
+
+        string text = FormatInterval(normalized);
+        if (!string.Equals(repeatIntervalText, text, StringComparison.Ordinal))
+        {
+            repeatIntervalText = text;
+            OnPropertyChanged(nameof(RepeatIntervalText));
+        }
     }
+
+    partial void OnRepeatIntervalTextChanged(string value)
+    {
+        if (TryParseInterval(value, out int parsed))
+        {
+            RepeatIntervalMs = parsed;
+        }
+    }
+
+    partial void OnParameterRepeatIntervalMsChanged(int value)
+    {
+        int normalized = NormalizeInterval(value);
+        if (value != normalized)
+        {
+            ParameterRepeatIntervalMs = normalized;
+            return;
+        }
+
+        string text = FormatInterval(normalized);
+        if (!string.Equals(parameterRepeatIntervalText, text, StringComparison.Ordinal))
+        {
+            parameterRepeatIntervalText = text;
+            OnPropertyChanged(nameof(ParameterRepeatIntervalText));
+        }
+    }
+
+    partial void OnParameterRepeatIntervalTextChanged(string value)
+    {
+        if (TryParseInterval(value, out int parsed))
+        {
+            ParameterRepeatIntervalMs = parsed;
+        }
+    }
+
+    private IReadOnlyList<string> GetTemplateVariableNames() => ByteText.GetVariableNames(Template);
 
     private void NotifyVariablePresentationChanged()
     {
@@ -292,13 +357,21 @@ public partial class QuickCommandItemViewModel : ObservableObject
     private static readonly IReadOnlyDictionary<string, string> EmptyVariables =
         new Dictionary<string, string>();
 
-    private static readonly Regex VariableRegex = new(
-        @"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     private static GridLength CreateStarWidth(double value, double fallback) =>
         new(double.IsFinite(value) && value > 0 ? value : fallback, GridUnitType.Star);
 
     private static double GetColumnWeight(GridLength width, double fallback) =>
         double.IsFinite(width.Value) && width.Value > 0 ? width.Value : fallback;
+
+    private static int ParseInterval(string value, int fallback) =>
+        TryParseInterval(value, out int parsed) ? parsed : NormalizeInterval(fallback);
+
+    private static bool TryParseInterval(string value, out int interval) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out interval)
+        && interval is >= 10 and <= 60_000;
+
+    private static int NormalizeInterval(int value) => Math.Clamp(value, 10, 60_000);
+
+    private static string FormatInterval(int value) =>
+        NormalizeInterval(value).ToString(CultureInfo.InvariantCulture);
 }

@@ -59,6 +59,21 @@ public sealed class ByteTextTests
     }
 
     [Fact]
+    public void ExpandVariablesSupportsChineseVariableNames()
+    {
+        string result = ByteText.ExpandVariables(
+            "hmt+sound_enable=&{语音编号},${开关}",
+            new Dictionary<string, string>
+            {
+                ["语音编号"] = "1",
+                ["开关"] = "0"
+            });
+
+        Assert.Equal("hmt+sound_enable=1,0", result);
+        Assert.Equal(["语音编号", "开关"], ByteText.GetVariableNames("&{语音编号},${开关}"));
+    }
+
+    [Fact]
     public void ExpandVariablesKeepsFixedCommandUnchangedWhenDefaultSetIsEmpty()
     {
         const string command = "AT+BAUD=115200";
