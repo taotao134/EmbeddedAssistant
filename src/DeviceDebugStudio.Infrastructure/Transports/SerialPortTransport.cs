@@ -52,6 +52,7 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
     private long _workerReceivedBytes;
     private long _workerRetryCount;
     private long _workerTimeoutStreak;
+    private int _systemSuspended;
 
     public override string DisplayName => string.IsNullOrWhiteSpace(settings.PortName) ? "串口" : settings.PortName;
     public override TransportKind Kind => TransportKind.Serial;
@@ -59,6 +60,27 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
     public long WorkerReceivedBytes => Interlocked.Read(ref _workerReceivedBytes);
     public long WorkerRetryCount => Interlocked.Read(ref _workerRetryCount);
     public long WorkerTimeoutStreak => Interlocked.Read(ref _workerTimeoutStreak);
+    public bool SystemSuspended => Volatile.Read(ref _systemSuspended) != 0;
+
+    /// <summary>
+    /// 更新系统睡眠状态，避免睡眠期间把暂停的工作进程误判为故障。
+    /// </summary>
+    /// <param name="suspended">是否进入系统睡眠。</param>
+    public void SetSystemSuspended(bool suspended)
+    {
+        Interlocked.Exchange(ref _systemSuspended, suspended ? 1 : 0);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (suspended)
+        {
+            WriteDebugLog(_diagnosticAttemptId ?? "无连接编号", "系统即将睡眠，暂停串口工作进程健康判定。");
+            return;
+        }
+
+        // 唤醒后刷新基线，避免把睡眠时长计入心跳超时。
+        Interlocked.Exchange(ref _lastWorkerHeartbeatUnixMs, now);
+        Interlocked.Exchange(ref _lastWorkerReadActivityUnixMs, now);
+        WriteDebugLog(_diagnosticAttemptId ?? "无连接编号", "系统已唤醒，刷新串口工作进程健康判定基线。");
+    }
 
     protected override async Task OnConnectAsync(CancellationToken cancellationToken)
     {
@@ -74,11 +96,12 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
 
         string attemptId = Guid.NewGuid().ToString("N")[..12];
         _diagnosticAttemptId = attemptId;
-        Interlocked.Exchange(ref _lastWorkerHeartbeatUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Interlocked.Exchange(ref _lastWorkerHeartbeatUnixMs, 0);
         Interlocked.Exchange(ref _lastWorkerReadActivityUnixMs, 0);
         Interlocked.Exchange(ref _workerReceivedBytes, 0);
         Interlocked.Exchange(ref _workerRetryCount, 0);
         Interlocked.Exchange(ref _workerTimeoutStreak, 0);
+        Interlocked.Exchange(ref _systemSuspended, 0);
         WriteDebugLog(
             attemptId,
             $"父进程开始连接：端口={settings.PortName}，波特率={settings.BaudRate}，数据位={settings.DataBits}，"
@@ -172,6 +195,9 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
             {
                 throw CreateWorkerException(openedFrame, "驱动未能将串口置为打开状态。");
             }
+
+            MarkWorkerHeartbeatActivity();
+            WriteDebugLog(attemptId, "父进程以串口打开成功时刻建立工作进程心跳监视基线。");
 
             CancellationTokenSource readCancellation = new();
             _readCancellation = readCancellation;
@@ -394,10 +420,10 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
                         }
                         break;
                     case WorkerErrorMessage:
-                        ReportFault(new IOException($"串口 {settings.PortName} 读取失败：{DecodeMessage(frame.Payload)}"));
+                        ReportWorkerFault(new IOException($"串口 {settings.PortName} 读取失败：{DecodeMessage(frame.Payload)}"));
                         return;
                     default:
-                        ReportFault(new IOException($"串口 {settings.PortName} 工作进程返回了未知消息。"));
+                        ReportWorkerFault(new IOException($"串口 {settings.PortName} 工作进程返回了未知消息。"));
                         return;
                 }
             }
@@ -408,13 +434,24 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
         catch (EndOfStreamException exception)
         {
             WriteDebugLog(_diagnosticAttemptId ?? "无连接编号", "父进程读取工作进程事件时发现管道已关闭。", exception);
-            ReportFault(new IOException($"串口 {settings.PortName} 工作进程已意外退出。", exception));
+            ReportWorkerFault(new IOException($"串口 {settings.PortName} 工作进程已意外退出。", exception));
         }
         catch (Exception exception)
         {
             WriteDebugLog(_diagnosticAttemptId ?? "无连接编号", "父进程读取工作进程事件失败。", exception);
-            ReportFault(new IOException($"串口 {settings.PortName} 通信失败：{exception.Message}", exception));
+            ReportWorkerFault(new IOException($"串口 {settings.PortName} 通信失败：{exception.Message}", exception));
         }
+    }
+
+    private void ReportWorkerFault(Exception exception)
+    {
+        if (Volatile.Read(ref _systemSuspended) != 0)
+        {
+            WriteDebugLog(_diagnosticAttemptId ?? "无连接编号", "系统睡眠期间忽略串口工作进程故障，等待唤醒恢复。", exception);
+            return;
+        }
+
+        ReportFault(exception);
     }
 
     private bool ApplyWorkerHeartbeat(byte[] payload)
@@ -444,6 +481,11 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
             while (!cancellationToken.IsCancellationRequested)
             {
                 await Task.Delay(WorkerHeartbeatIntervalMilliseconds, cancellationToken).ConfigureAwait(false);
+                if (Volatile.Read(ref _systemSuspended) != 0)
+                {
+                    continue;
+                }
+
                 long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 long lastHeartbeat = Interlocked.Read(ref _lastWorkerHeartbeatUnixMs);
                 long lastReadActivity = Interlocked.Read(ref _lastWorkerReadActivityUnixMs);
@@ -477,8 +519,14 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
     internal static string? GetWorkerFailureReason(
         long nowUnixMilliseconds,
         long lastHeartbeatUnixMilliseconds,
-        long lastReadActivityUnixMilliseconds)
+        long lastReadActivityUnixMilliseconds,
+        bool systemSuspended = false)
     {
+        if (systemSuspended)
+        {
+            return null;
+        }
+
         long heartbeatIdleMilliseconds = lastHeartbeatUnixMilliseconds <= 0
             ? long.MaxValue
             : nowUnixMilliseconds - lastHeartbeatUnixMilliseconds;
@@ -511,7 +559,7 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
             attemptId,
             $"父进程收到工作进程退出事件：PID={TryGetProcessId(workerProcess)}，退出码={exitCode}，"
                 + $"连接状态={State}。");
-        if (_disconnectInProgress != 0 || _readCancellation is null)
+        if (_disconnectInProgress != 0 || _readCancellation is null || Volatile.Read(ref _systemSuspended) != 0)
         {
             return;
         }
@@ -521,6 +569,12 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
 
     private async Task FailWorkerAsync(string attemptId, string reason)
     {
+        if (Volatile.Read(ref _systemSuspended) != 0)
+        {
+            WriteDebugLog(attemptId, "系统睡眠期间忽略串口工作进程故障清理，等待唤醒恢复。", new IOException(reason));
+            return;
+        }
+
         WriteDebugLog(attemptId, $"父进程判定串口工作进程故障：{reason}");
         ReportFault(new IOException(reason));
         await _workerCleanupLock.WaitAsync().ConfigureAwait(false);
@@ -568,6 +622,7 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
             _diagnosticAttemptId = null;
             Interlocked.Exchange(ref _lastWorkerHeartbeatUnixMs, 0);
             Interlocked.Exchange(ref _lastWorkerReadActivityUnixMs, 0);
+            Interlocked.Exchange(ref _systemSuspended, 0);
         }
         finally
         {

@@ -59,7 +59,7 @@ public sealed class ByteTextTests
     }
 
     [Fact]
-    public void ExpandVariablesSupportsChineseVariableNames()
+    public void ExpandVariablesOnlyMatchesDollarBracePlaceholders()
     {
         string result = ByteText.ExpandVariables(
             "hmt+sound_enable=&{语音编号},${开关}",
@@ -69,8 +69,8 @@ public sealed class ByteTextTests
                 ["开关"] = "0"
             });
 
-        Assert.Equal("hmt+sound_enable=1,0", result);
-        Assert.Equal(["语音编号", "开关"], ByteText.GetVariableNames("&{语音编号},${开关}"));
+        Assert.Equal("hmt+sound_enable=&{语音编号},0", result);
+        Assert.Equal(["开关"], ByteText.GetVariableNames("&{语音编号},${开关}"));
     }
 
     [Fact]

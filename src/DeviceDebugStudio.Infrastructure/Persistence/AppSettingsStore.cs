@@ -20,6 +20,7 @@ public sealed record AppSettings
 
     public string ProfileDirectory { get; init; } = AppPaths.ProfilesDirectory;
     public Guid? SelectedProfileId { get; init; }
+    public Dictionary<Guid, string> ImportedProfileSourcePaths { get; init; } = [];
     public double TerminalFontSize { get; init; } = 12;
     public double TerminalTimeColumnWidth { get; init; } = DefaultTerminalTimeColumnWidth;
     public double TerminalDirectionColumnWidth { get; init; } = DefaultTerminalDirectionColumnWidth;

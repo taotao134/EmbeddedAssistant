@@ -193,6 +193,6 @@ public static partial class ByteText
     [GeneratedRegex(@"[^0-9A-Fa-f]")]
     private static partial Regex NonHexSeparatorRegex();
 
-    [GeneratedRegex(@"(?:\$\{|&\{)([\p{L}\p{Nl}_][\p{L}\p{Nl}\p{M}\p{N}_]*)\}")]
+    [GeneratedRegex(@"\$\{([\p{L}\p{Nl}_][\p{L}\p{Nl}\p{M}\p{N}_]*)\}")]
     private static partial Regex VariableRegex();
 }

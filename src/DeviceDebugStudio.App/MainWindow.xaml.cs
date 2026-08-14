@@ -124,6 +124,7 @@ public partial class MainWindow : FluentWindow
         _viewModel = viewModel;
         DataContext = viewModel;
         InitializeComponent();
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
         Title = App.MainWindowTitle;
         AddHandler(
             Mouse.PreviewMouseDownEvent,
@@ -365,6 +366,7 @@ public partial class MainWindow : FluentWindow
     protected override void OnClosed(EventArgs e)
     {
         Loaded -= OnMainWindowLoaded;
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         _quickCommandScrollTimer.Stop();
         _quickCommandScrollTimer.Tick -= OnQuickCommandScrollTimerTick;
         _viewModel.QuickCommandAdded -= OnQuickCommandAdded;
@@ -673,6 +675,24 @@ public partial class MainWindow : FluentWindow
         {
             TerminalPlainTextBox.ScrollToEnd();
         }
+    }
+
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        bool suspending = e.Mode == PowerModes.Suspend;
+        bool resuming = e.Mode == PowerModes.Resume;
+        if ((!suspending && !resuming) || _closing || Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(() =>
+        {
+            if (!_closing)
+            {
+                _viewModel.HandleSystemPowerModeChanged(suspending);
+            }
+        }));
     }
 
     private List<(string Text, bool IsSeparator)> BuildTerminalPlainTextEntries(int start, int count)
@@ -1951,6 +1971,31 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    private void OnAiImportClick(object sender, RoutedEventArgs e)
+    {
+        OpenFolderDialog dialog = new()
+        {
+            Title = "选择嵌入式工程根目录",
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            string prompt = _viewModel.BuildAiImportPrompt(dialog.FolderName);
+            Clipboard.SetText(prompt);
+            _viewModel.StatusText = "AI导入提示词已生成并复制到剪贴板，请粘贴给 Codex。";
+        }
+        catch (Exception exception)
+        {
+            _viewModel.StatusText = $"AI导入提示词生成失败：{exception.Message}";
+        }
+    }
+
     private void OnOpenProfileActionsClick(object sender, RoutedEventArgs e)
     {
         OpenContextMenuBelow(ProfileActionsMenu, ProfileActionsButton);
@@ -2146,6 +2191,29 @@ public partial class MainWindow : FluentWindow
         }
 
         _viewModel.TerminalFontSize += e.Delta > 0 ? 1 : -1;
+        e.Handled = true;
+    }
+
+    private void OnSendTextPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            OnTerminalPreviewMouseWheel(sender, e);
+            return;
+        }
+
+        if (sender is not TextBox textBox
+            || textBox.Template.FindName("PART_ContentHost", textBox) is not ScrollViewer scrollViewer
+            || scrollViewer.ScrollableHeight <= 0)
+        {
+            return;
+        }
+
+        double targetOffset = Math.Clamp(
+            scrollViewer.VerticalOffset - e.Delta,
+            0,
+            scrollViewer.ScrollableHeight);
+        scrollViewer.ScrollToVerticalOffset(targetOffset);
         e.Handled = true;
     }
 

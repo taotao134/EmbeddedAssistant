@@ -67,7 +67,7 @@ public sealed class TerminalRecordItemTests
     }
 
     [Fact]
-    public void WaveSeparatorTracker_UsesEndOfPreviousReceiveAndStrictThreshold()
+    public void WaveSeparatorTracker_UsesEndOfPreviousPacketAndStrictThreshold()
     {
         DateTimeOffset startedAt = DateTimeOffset.UtcNow;
         TerminalWaveSeparatorTracker tracker = new();
@@ -82,6 +82,25 @@ public sealed class TerminalRecordItemTests
             TimeSpan.FromMilliseconds(100)));
         TimeSpan? gap = tracker.Observe(
             new(startedAt.AddMilliseconds(221), PacketDirection.Receive, [0x43], "COM8"),
+            TimeSpan.FromMilliseconds(100));
+
+        Assert.Equal(TimeSpan.FromMilliseconds(101), gap);
+    }
+
+    [Fact]
+    public void WaveSeparatorTracker_ReportsLongGapBeforeNextSend()
+    {
+        DateTimeOffset startedAt = DateTimeOffset.UtcNow;
+        TerminalWaveSeparatorTracker tracker = new();
+        TransportPacket previousReceive = new(startedAt, PacketDirection.Receive, [0x41], "COM8")
+        {
+            EndTimestamp = startedAt.AddMilliseconds(20)
+        };
+
+        Assert.Null(tracker.Observe(previousReceive, TimeSpan.FromMilliseconds(100)));
+
+        TimeSpan? gap = tracker.Observe(
+            new(startedAt.AddMilliseconds(121), PacketDirection.Send, [0x42], "COM8"),
             TimeSpan.FromMilliseconds(100));
 
         Assert.Equal(TimeSpan.FromMilliseconds(101), gap);

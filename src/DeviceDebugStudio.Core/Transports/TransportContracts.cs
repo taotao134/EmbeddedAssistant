@@ -59,10 +59,7 @@ public enum SerialHandshake
 [JsonDerivedType(typeof(TcpServerTransportSettings), "tcp-server")]
 [JsonDerivedType(typeof(UdpTransportSettings), "udp")]
 [JsonDerivedType(typeof(BleGattTransportSettings), "ble-gatt")]
-public abstract record TransportSettings(TransportKind Kind)
-{
-    public bool AutoReconnect { get; init; }
-}
+public abstract record TransportSettings(TransportKind Kind);
 
 public sealed record SerialTransportSettings() : TransportSettings(TransportKind.Serial)
 {

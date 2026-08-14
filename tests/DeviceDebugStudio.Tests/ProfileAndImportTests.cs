@@ -19,8 +19,13 @@ public sealed class ProfileAndImportTests
     [Fact]
     public void AppSettingsRoundTripsTerminalColumnWidths()
     {
+        Guid importedProfileId = Guid.NewGuid();
         AppSettings settings = new()
         {
+            ImportedProfileSourcePaths = new()
+            {
+                [importedProfileId] = @"D:\imported\ka.json"
+            },
             TerminalTimeColumnWidth = 96,
             TerminalDirectionColumnWidth = 54,
             TerminalEndpointColumnWidth = 184,
@@ -43,6 +48,7 @@ public sealed class ProfileAndImportTests
         AppSettings loaded = Assert.IsType<AppSettings>(JsonSerializer.Deserialize<AppSettings>(json));
 
         Assert.Equal(96, loaded.TerminalTimeColumnWidth);
+        Assert.Equal(@"D:\imported\ka.json", loaded.ImportedProfileSourcePaths[importedProfileId]);
         Assert.Equal(54, loaded.TerminalDirectionColumnWidth);
         Assert.Equal(184, loaded.TerminalEndpointColumnWidth);
         Assert.Equal(72, loaded.TerminalSizeColumnWidth);
@@ -60,6 +66,7 @@ public sealed class ProfileAndImportTests
         Assert.True(loaded.DebugLoggingEnabled);
 
         AppSettings defaults = Assert.IsType<AppSettings>(JsonSerializer.Deserialize<AppSettings>("{}"));
+        Assert.Empty(defaults.ImportedProfileSourcePaths);
         Assert.Equal(AppSettings.DefaultTerminalTimeColumnWidth, defaults.TerminalTimeColumnWidth);
         Assert.Equal(AppSettings.DefaultTerminalContentColumnWidth, defaults.TerminalContentColumnWidth);
         Assert.Equal(AppSettings.DefaultFrameTimeColumnWidth, defaults.FrameTimeColumnWidth);
@@ -281,26 +288,27 @@ public sealed class ProfileAndImportTests
         });
 
         Assert.Equal("$SETIP,192,168,0,10", command.Payload);
-        Assert.Equal(command.Payload, command.TemplateOrPayload);
+        Assert.Equal("$SETIP,192,168,0,10", command.Template);
         Assert.DoesNotContain('\u0002', command.ToModel().Payload);
     }
 
     [Fact]
-    public void EditingQuickCommandPayloadUpdatesSentTemplate()
+    public void EditingQuickCommandPayloadDoesNotUpdateSchemeTemplate()
     {
         QuickCommandItemViewModel command = new(new QuickCommand
         {
-            Payload = "$SETIP19216811"
+            Payload = "$SETIP,192,168,1,1",
+            Template = "$SETIP,${ip_a},${ip_b},${ip_c},${ip_d}"
         });
 
         command.Payload = "$SETIP,192,168,0,10";
 
-        Assert.Equal(command.Payload, command.Template);
-        Assert.Equal(command.Payload, command.TemplateOrPayload);
+        Assert.Equal("$SETIP,192,168,0,10", command.Payload);
+        Assert.Equal("$SETIP,${ip_a},${ip_b},${ip_c},${ip_d}", command.Template);
     }
 
     [Fact]
-    public void MigratesStaleDirectTemplateToVisiblePayload()
+    public void PreservesIndependentPayloadAndDirectSchemeTemplate()
     {
         QuickCommandItemViewModel command = new(new QuickCommand
         {
@@ -308,8 +316,108 @@ public sealed class ProfileAndImportTests
             Template = "$SETIP19216811"
         });
 
-        Assert.Equal(command.Payload, command.Template);
-        Assert.Equal(command.Payload, command.TemplateOrPayload);
+        Assert.Equal("$SETIP,192,168,0,10", command.Payload);
+        Assert.Equal("$SETIP19216811", command.Template);
+    }
+
+    [Fact]
+    public void VariableSchemeChangesOnlyResolvedSchemePayload()
+    {
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Payload = "$SETIP,192,168,1,1",
+            Template = "$SETIP,${ip_a},${ip_b},${ip_c},${ip_d}",
+            VariableSets =
+            [
+                new QuickCommandVariableSet
+                {
+                    Name = "方案一",
+                    Variables =
+                    [
+                        new QuickCommandVariable { Name = "ip_a", Value = "192" },
+                        new QuickCommandVariable { Name = "ip_b", Value = "168" },
+                        new QuickCommandVariable { Name = "ip_c", Value = "0" },
+                        new QuickCommandVariable { Name = "ip_d", Value = "10" }
+                    ]
+                }
+            ]
+        });
+
+        QuickCommandVariableItemViewModel variable =
+            Assert.Single(command.SelectedVariableSet!.Variables, item => item.Name == "ip_d");
+        variable.Value = "20";
+
+        Assert.Equal("$SETIP,192,168,1,1", command.Payload);
+        Assert.Equal("$SETIP,192,168,0,20", command.ResolvedPayload);
+
+        command.Payload = "$SETIP,10,0,0,1";
+
+        Assert.Equal("$SETIP,10,0,0,1", command.Payload);
+        Assert.Equal("$SETIP,192,168,0,20", command.ResolvedPayload);
+
+        QuickCommand saved = command.ToModel();
+        Assert.Equal("$SETIP,10,0,0,1", saved.Payload);
+        Assert.Equal("$SETIP,${ip_a},${ip_b},${ip_c},${ip_d}", saved.Template);
+        Assert.Equal(command.SelectedVariableSet!.Id, saved.SelectedVariableSetId);
+    }
+
+    [Fact]
+    public void TemplateEditingKeepsOnlyCurrentDollarBraceVariables()
+    {
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Template = "$SETPOWER,BUCS10V5,${开关}",
+            VariableSets =
+            [
+                new QuickCommandVariableSet
+                {
+                    Name = "默认",
+                    Variables =
+                    [
+                        new QuickCommandVariable { Name = "开关", Value = "1" },
+                        new QuickCommandVariable { Name = "历史参数", Value = "unused" }
+                    ]
+                }
+            ]
+        });
+
+        QuickCommandVariableItemViewModel initial = Assert.Single(command.SelectedVariableSet!.Variables);
+        Assert.Equal("开关", initial.Name);
+        Assert.Equal("1", initial.Value);
+
+        command.Template = "$SETPOWER,BUCS10V5,${开关sfd}";
+        command.Template = "$SETPOWER,BUCS10V5,${开关sfdsdf},&{legacy}";
+
+        QuickCommandVariableItemViewModel final = Assert.Single(command.SelectedVariableSet.Variables);
+        Assert.Equal("开关sfdsdf", final.Name);
+        Assert.Equal(string.Empty, final.Value);
+        Assert.Equal("$SETPOWER,BUCS10V5,,&{legacy}", command.ResolvedPayload);
+    }
+
+    [Fact]
+    public void TemplateSynchronizationPreservesValuesForVariablesThatStillExist()
+    {
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Template = "$SET,${first},${second}",
+            VariableSets =
+            [
+                new QuickCommandVariableSet
+                {
+                    Variables =
+                    [
+                        new QuickCommandVariable { Name = "first", Value = "A" },
+                        new QuickCommandVariable { Name = "second", Value = "B" }
+                    ]
+                }
+            ]
+        });
+
+        command.Template = "$SET,${second},${third}";
+
+        Assert.Equal(["second", "third"], command.SelectedVariableSet!.Variables.Select(variable => variable.Name));
+        Assert.Equal("B", command.SelectedVariableSet.Variables[0].Value);
+        Assert.Equal(string.Empty, command.SelectedVariableSet.Variables[1].Value);
     }
 
     [Fact]
@@ -320,6 +428,11 @@ public sealed class ProfileAndImportTests
         {
             string path = Path.Combine(directory, "device.json");
             DeviceProfileFileService service = new();
+            QuickCommandVariableSet variableSet = new()
+            {
+                Name = "通道 2",
+                Variables = [new QuickCommandVariable { Name = "channel", Value = "02" }]
+            };
             DeviceProfile source = new()
             {
                 Name = "网络设备",
@@ -334,17 +447,13 @@ public sealed class ProfileAndImportTests
                             new QuickCommand
                             {
                                 Name = "启动",
+                                Payload = "$START,1",
+                                Template = "$START,${channel}",
                                 UsageCount = 8,
                                 NameColumnWeight = 110,
                                 PayloadColumnWeight = 322,
-                                VariableSets =
-                                [
-                                    new QuickCommandVariableSet
-                                    {
-                                        Name = "通道 2",
-                                        Variables = [new QuickCommandVariable { Name = "channel", Value = "02" }]
-                                    }
-                                ]
+                                VariableSets = [variableSet],
+                                SelectedVariableSetId = variableSet.Id
                             }
                         ]
                     }
@@ -360,7 +469,11 @@ public sealed class ProfileAndImportTests
             Assert.Equal(8, imported.CommandGroups[0].Commands[0].UsageCount);
             Assert.Equal(110, imported.CommandGroups[0].Commands[0].NameColumnWeight);
             Assert.Equal(322, imported.CommandGroups[0].Commands[0].PayloadColumnWeight);
-            QuickCommandVariableSet importedSet = Assert.Single(imported.CommandGroups[0].Commands[0].VariableSets);
+            QuickCommand importedCommand = imported.CommandGroups[0].Commands[0];
+            Assert.Equal("$START,1", importedCommand.Payload);
+            Assert.Equal("$START,${channel}", importedCommand.Template);
+            Assert.Equal(variableSet.Id, importedCommand.SelectedVariableSetId);
+            QuickCommandVariableSet importedSet = Assert.Single(importedCommand.VariableSets);
             QuickCommandVariable importedVariable = Assert.Single(importedSet.Variables);
             Assert.Equal("通道 2", importedSet.Name);
             Assert.Equal("channel", importedVariable.Name);
@@ -465,7 +578,7 @@ public sealed class ProfileAndImportTests
             ["分布式"] = 8,
             ["富瑞坤"] = 21,
             ["开关矩阵"] = 1,
-            ["移相器"] = 61,
+            ["移相器"] = 62,
             ["C02"] = 89,
             ["E90新模块"] = 6,
             ["ESP32lyrat"] = 34,

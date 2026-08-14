@@ -17,15 +17,14 @@ public partial class QuickCommandItemViewModel : ObservableObject
         Id = command.Id;
         name = command.Name;
         string initialPayload = ByteText.NormalizeSscomCommandText(command.Payload);
-        string initialTemplate = ByteText.NormalizeSscomCommandText(
-            string.IsNullOrEmpty(command.Template) ? initialPayload : command.Template);
-        if (ByteText.GetVariableNames(initialTemplate).Count == 0)
+        string initialTemplate = ByteText.NormalizeSscomCommandText(command.Template);
+        if (string.IsNullOrEmpty(initialTemplate))
         {
-            if (string.IsNullOrEmpty(initialPayload))
-            {
-                initialPayload = initialTemplate;
-            }
             initialTemplate = initialPayload;
+        }
+        else if (string.IsNullOrEmpty(initialPayload))
+        {
+            initialPayload = initialTemplate;
         }
         payload = initialPayload;
         template = initialTemplate;
@@ -148,8 +147,7 @@ public partial class QuickCommandItemViewModel : ObservableObject
     public string UsageText => UsageCount == 0 ? "未使用" : $"使用 {UsageCount} 次";
     public string UsageShortText => UsageCount > 999 ? "999+" : UsageCount.ToString();
     public string VariableSetCountText => $"{VariableSets.Count} 套方案";
-    public string TemplateOrPayload => HasTemplateVariables ? Template : Payload;
-    public string ResolvedPayload => ByteText.ExpandVariables(TemplateOrPayload, SelectedVariableSet?.GetValues() ?? EmptyVariables);
+    public string ResolvedPayload => ByteText.ExpandVariables(Template, SelectedVariableSet?.GetValues() ?? EmptyVariables);
     public bool HasTemplateVariables => GetTemplateVariableNames().Count > 0;
     public bool IsDirectPayloadMode => !HasTemplateVariables;
     public bool HasSelectedVariables => SelectedVariableSet?.Variables.Count > 0;
@@ -182,18 +180,42 @@ public partial class QuickCommandItemViewModel : ObservableObject
         IReadOnlyList<string> variableNames = GetTemplateVariableNames();
         foreach (QuickCommandVariableSetItemViewModel variableSet in VariableSets)
         {
-            HashSet<string> existing = variableSet.Variables
-                .Select(variable => variable.Name)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (string variableName in variableNames)
+            for (int targetIndex = 0; targetIndex < variableNames.Count; targetIndex++)
             {
-                if (existing.Add(variableName))
+                string variableName = variableNames[targetIndex];
+                int existingIndex = -1;
+                for (int index = targetIndex; index < variableSet.Variables.Count; index++)
                 {
-                    variableSet.Variables.Add(new QuickCommandVariableItemViewModel(new QuickCommandVariable
+                    if (string.Equals(
+                        variableSet.Variables[index].Name.Trim(),
+                        variableName,
+                        StringComparison.OrdinalIgnoreCase))
                     {
-                        Name = variableName
-                    }));
+                        existingIndex = index;
+                        break;
+                    }
                 }
+
+                if (existingIndex < 0)
+                {
+                    variableSet.Variables.Insert(
+                        targetIndex,
+                        new QuickCommandVariableItemViewModel(new QuickCommandVariable { Name = variableName }));
+                }
+                else if (existingIndex != targetIndex)
+                {
+                    variableSet.Variables.Move(existingIndex, targetIndex);
+                }
+
+                if (!string.Equals(variableSet.Variables[targetIndex].Name, variableName, StringComparison.Ordinal))
+                {
+                    variableSet.Variables[targetIndex].Name = variableName;
+                }
+            }
+
+            while (variableSet.Variables.Count > variableNames.Count)
+            {
+                variableSet.Variables.RemoveAt(variableSet.Variables.Count - 1);
             }
         }
 
@@ -261,14 +283,6 @@ public partial class QuickCommandItemViewModel : ObservableObject
             value = normalized;
             OnPropertyChanged(nameof(Payload));
         }
-
-        if (!HasTemplateVariables && !string.Equals(template, value, StringComparison.Ordinal))
-        {
-            template = value;
-            OnPropertyChanged(nameof(Template));
-        }
-        OnPropertyChanged(nameof(TemplateOrPayload));
-        NotifyVariablePresentationChanged();
     }
 
     partial void OnTemplateChanged(string value)
@@ -281,12 +295,6 @@ public partial class QuickCommandItemViewModel : ObservableObject
             OnPropertyChanged(nameof(Template));
         }
 
-        if (ByteText.GetVariableNames(value).Count == 0 && !string.Equals(payload, value, StringComparison.Ordinal))
-        {
-            payload = value;
-            OnPropertyChanged(nameof(Payload));
-        }
-        OnPropertyChanged(nameof(TemplateOrPayload));
         SynchronizeTemplateVariables();
     }
 

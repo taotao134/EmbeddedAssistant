@@ -111,6 +111,20 @@ public sealed class SerialPortTransportTests
     }
 
     [Fact]
+    public void WorkerHealthIgnoresSleepGap()
+    {
+        long now = 10_000;
+
+        string? reason = SerialPortTransport.GetWorkerFailureReason(
+            now,
+            lastHeartbeatUnixMilliseconds: now - 60_000,
+            lastReadActivityUnixMilliseconds: now - 60_000,
+            systemSuspended: true);
+
+        Assert.Null(reason);
+    }
+
+    [Fact]
     public async Task EventPipeWriteTimesOutUnderBackpressure()
     {
         string pipeName = $"DeviceDebugStudio.Test.Event.{Guid.NewGuid():N}";

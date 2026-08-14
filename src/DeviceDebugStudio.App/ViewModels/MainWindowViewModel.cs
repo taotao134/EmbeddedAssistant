@@ -66,6 +66,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly Dictionary<Guid, CancellationTokenSource> _repeatCommands = [];
     private readonly Dictionary<Guid, CancellationTokenSource> _parameterRepeatCommands = [];
     private readonly Dictionary<QuickCommandCategory, List<QuickCommandItemViewModel>> _quickCommandsByCategory = [];
+    private readonly ConcurrentDictionary<Guid, string> _importedProfileSourcePaths = new();
     private CancellationTokenSource? _sendRepeatCancellation;
     private readonly object _decoderSync = new();
     private readonly object _frameCodecSync = new();
@@ -100,8 +101,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private DateTimeOffset _lastQueueSampleTimestamp = DateTimeOffset.MinValue;
     private bool _manualDisconnect;
     private bool _connectionDesired;
-    private bool _connectionRetryPending;
+    private bool _systemSuspended;
     private CancellationTokenSource? _connectionAttemptCancellation;
+    private CancellationTokenSource? _baudRateHotSwitchCancellation;
     private Decoder? _receiveDecoder;
     private string _decoderEncodingName = string.Empty;
     private DateTimeOffset _lastFrameInput;
@@ -332,9 +334,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private int receiveTimeoutMs = 20;
 
     [ObservableProperty]
-    private bool autoReconnect;
-
-    [ObservableProperty]
     private string host = "127.0.0.1";
 
     [ObservableProperty]
@@ -548,9 +547,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public string ConnectionButtonText => SelectedTransportKind == TransportKind.TcpServer
         ? IsConnected ? "停止监听" : _connectionDesired ? "正在监听…" : "开始监听"
         : IsConnected ? "断开" : _connectionDesired ? "正在连接…" : "连接";
-    public string AutoReconnectText => SelectedTransportKind == TransportKind.TcpServer
-        ? "自动恢复监听"
-        : "自动重连";
     public string DiagnosticsDirectory => AppPaths.DiagnosticsDirectory;
     public string UpdateDiagnosticsDirectory => AppPaths.UpdateDiagnosticsDirectory;
     public string CaptureDirectory => AppPaths.CaptureDirectory;
@@ -606,6 +602,23 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _profileStore.SetDirectory(AppPaths.ProfilesDirectory);
         }
         ProfileDirectory = _profileStore.DirectoryPath;
+        _importedProfileSourcePaths.Clear();
+        foreach ((Guid profileId, string sourcePath) in settings.ImportedProfileSourcePaths)
+        {
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                continue;
+            }
+
+            try
+            {
+                _importedProfileSourcePaths[profileId] = Path.GetFullPath(sourcePath);
+            }
+            catch (ArgumentException)
+            {
+                // 忽略历史设置中的无效路径，当前配置仍可保存到默认目录。
+            }
+        }
         ApplyTerminalDisplaySettings(settings);
         GitHubRepository = string.IsNullOrWhiteSpace(settings.GitHubRepository)
             ? AppSettings.DefaultGitHubRepository
@@ -818,11 +831,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             int count = 0;
             foreach (string path in paths)
             {
-                DeviceProfile profile = await _profileFileService.ImportAsync(path).ConfigureAwait(true);
+                string sourcePath = Path.GetFullPath(path);
+                DeviceProfile profile = await _profileFileService.ImportAsync(sourcePath).ConfigureAwait(true);
                 await _profileStore.SaveAsync(profile).ConfigureAwait(true);
+                _importedProfileSourcePaths[profile.Id] = sourcePath;
                 count++;
             }
             await ReloadProfilesAsync().ConfigureAwait(true);
+            await SaveAppSettingsAsync().ConfigureAwait(true);
             StatusText = $"已导入 {count} 个设备配置到：{_profileStore.DirectoryPath}";
         }
         catch (Exception exception)
@@ -833,6 +849,71 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             IsBusy = false;
         }
+    }
+
+    public string BuildAiImportPrompt(string projectDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(projectDirectory))
+        {
+            throw new ArgumentException("工程目录不能为空。", nameof(projectDirectory));
+        }
+
+        string resolvedDirectory = Path.GetFullPath(projectDirectory.Trim());
+        if (!Directory.Exists(resolvedDirectory))
+        {
+            throw new DirectoryNotFoundException($"工程目录不存在：{resolvedDirectory}");
+        }
+
+        return $$"""
+            你是嵌入式通信协议分析和 DeviceDebugStudio 指令配置生成助手。
+
+            当前工程根目录（由用户在上位机中选择）
+            {{resolvedDirectory}}
+
+            请在上述目录内自行递归搜索并分析嵌入式工程，不要假设固定盘符、固定工程名、固定源码文件名，也不要假设一定存在 proc_cmd.c、user_cmd.c 或已有串口 JSON 文件。
+
+            任务目标：根据固件真实源码提取全部串口、TCP、UDP 或其他文本指令，生成一份可以直接导入 DeviceDebugStudio 的 JSON 文件。
+
+            【必须自行搜索的内容】
+            1. 递归检查 .c、.h、.cpp、.hpp 及工程配置文件。
+            2. 搜索串口、TCP、UDP 接收入口、命令解析器、命令分发表、字符串比较、参数解析、printf/sprintf/snprintf、sscanf、strtok、argc/argv、$、AT、GET、SET 等关键内容。
+            3. 沿着函数调用继续追踪实际命令处理函数、参数校验、状态分支、枚举表、宏定义和响应字符串。
+            4. 不要只检查文件名中看起来像命令处理的文件，必须覆盖工程中所有实际注册或解析指令的代码。
+
+            【协议真实性要求】
+            1. 只收录固件源码中真实存在的指令，不得根据经验、函数名或设备名称臆造指令。
+            2. 保留固件真实的命令字符串、前缀、大小写、分隔符、参数顺序和参数个数，不要重命名协议指令。
+            3. 每个参数都要提取源码真实含义、单位、默认值、范围、格式和允许值。
+            4. 对 0、1 或其他数字开关/枚举，必须依据源码分支、查表或宏定义写清楚真实含义。例如“0=关闭，1=开启”或“0=70MHz，1=720MHz”。禁止猜测；源码无法确认时标记为“源码未确认”。
+            5. 同时记录成功响应、失败响应和错误原因；如果这些信息不能表达在 JSON 字段中，写入配套核对表。
+
+            【DeviceDebugStudio JSON要求】
+            1. 在当前工程根目录下创建 Docs 目录（不存在则创建）。
+            2. 生成文件：Docs\DeviceDebugStudio_指令导入.json。
+            3. 使用当前软件支持的 SchemaVersion、WorkspaceMode、Transport、Terminal、CommandGroups、Commands、Payload、Template、Variables、VariableSets、SelectedVariableSetId 等字段，不添加软件不支持的自定义字段。
+            4. 默认 WorkspaceMode 使用 Serial，Transport 使用 serial；串口默认参数从工程配置、协议文档或源码中提取，无法确认时使用合理占位值并在核对表标记。
+            5. 串口和 TCP/UDP 使用同一份 JSON。对于相同的文本指令，在 Serial 和 TCP/UDP 指令组中保持一致；如果某条指令只支持特定传输方式，按源码真实情况归组并在核对表说明。
+            6. 无参数指令的 Payload 和 Template 使用固件中的完整命令。
+            7. 有参数指令必须使用变量模板。例如实际默认命令为 $SETIFFREQ,720，应生成 Payload 为 "$SETIFFREQ,720"，Template 为 "$SETIFFREQ,${freq_mhz}"，并为 freq_mhz 建立可编辑变量。
+            8. 使用软件支持的变量类型“数值”“枚举”“开关”。开关和枚举参数必须建立有明确中文含义的 VariableSets，并保存每个方案对应的真实发送值。数值参数必须保存源码或协议中的默认值。
+            9. 不要把键盘快捷键 Shortcut 和指令参数方案混淆；指令参数放在 Variables 和 VariableSets 中。
+            10. 必须保持 Payload 与 Template 解耦：Payload 是快捷指令栏直接编辑和发送的完整命令；Template 是展开编辑器中的方案模板。选择方案或修改方案变量只允许影响 Template 的方案预览和“使用此方案发送”，不得改写 Payload。
+            11. 修改 Payload 中的参数不得改写 Template、Variables 或 VariableSets；即使无参数模板的初始 Payload 与 Template 相同，导入后也必须作为两个独立字段保存。
+            12. 指令栏发送/快捷指令循环发送使用 Payload；方案编辑器发送/快捷参数循环发送使用 Template 结合 SelectedVariableSetId 对应 VariableSet 展开后的内容。
+
+            【核对表】
+            同时生成 Docs\DeviceDebugStudio_指令提取核对表.md，记录每条指令的：实际命令、参数、参数含义、0/1及枚举映射、默认值、单位、范围、响应、源码文件和行号。
+            对源码无法确认的内容单独列出，不要猜测或静默省略。
+
+            【生成后验证】
+            1. 使用结构化 JSON 解析器验证 JSON 格式。
+            2. 检查所有 Template 变量都存在于 Variables 或 VariableSets，且 SelectedVariableSetId 有效。
+            3. 分别检查 Payload 的默认参数数量、顺序和固件解析逻辑，以及 Template 的变量顺序和方案展开结果；不要用方案值覆盖 Payload。
+            4. 检查没有重复指令、遗漏指令、虚构指令或改变真实命名的指令。
+            5. 检查串口和 TCP/UDP 指令组符合当前 DeviceDebugStudio 导入结构。
+
+            最后汇报：扫描过的源码文件、生成的 JSON 路径、指令数量、参数方案数量、确认的开关/枚举含义、未确认问题以及 JSON 验证结果。
+            """;
     }
 
     public async Task ExportSelectedProfileAsync(string path)
@@ -1082,6 +1163,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _manualDisconnect = !_connectionDesired;
         if (!_connectionDesired)
         {
+            CancelPendingBaudRateHotSwitch();
             SendRepeatEnabled = false;
             StopSendRepeat();
             _connectionAttemptCancellation?.Cancel();
@@ -1098,13 +1180,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public bool CanSend => CanUseConnectedSession && !string.IsNullOrEmpty(SendText);
 
     private bool CanSendQuickCommand(QuickCommandItemViewModel? command) =>
-        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.TemplateOrPayload);
+        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.Payload);
+
+    private bool CanSendQuickParameterCommand(QuickCommandItemViewModel? command) =>
+        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.ResolvedPayload);
 
     private bool CanToggleQuickRepeat(QuickCommandItemViewModel? command) =>
-        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.TemplateOrPayload);
+        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.Payload);
 
     private bool CanToggleQuickParameterRepeat(QuickCommandItemViewModel? command) =>
-        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.TemplateOrPayload);
+        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.ResolvedPayload);
 
     [RelayCommand(CanExecute = nameof(CanSend))]
     private async Task SendAsync()
@@ -1254,15 +1339,53 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         (bool isHex, Encoding encoding, string formatLabel) = ResolveQuickCommandDataFormat(command);
         return await SendPayloadAsync(
-            command.TemplateOrPayload,
+            command.Payload,
             isHex,
             command.LineEnding,
             command.Checksum,
             command.ChecksumLittleEndian,
             encoding,
             formatLabel,
-            BuildQuickCommandVariables(command),
             source: $"快捷指令:{command.Name}").ConfigureAwait(true);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSendQuickParameterCommand))]
+    private async Task SendQuickParameterCommandAsync(QuickCommandItemViewModel? command)
+    {
+        try
+        {
+            if (command is not null)
+            {
+                await SendQuickParameterCommandCoreAsync(command).ConfigureAwait(true);
+            }
+        }
+        finally
+        {
+            RefreshSendCommandAvailability();
+        }
+    }
+
+    private async Task SendQuickParameterCommandCoreAsync(QuickCommandItemViewModel command)
+    {
+        if (!QuickCommands.Contains(command))
+        {
+            return;
+        }
+
+        (bool isHex, Encoding encoding, string formatLabel) = ResolveQuickCommandDataFormat(command);
+        if (await SendPayloadAsync(
+                command.ResolvedPayload,
+                isHex,
+                command.LineEnding,
+                command.Checksum,
+                command.ChecksumLittleEndian,
+                encoding,
+                formatLabel,
+                source: $"快捷参数:{command.Name}").ConfigureAwait(true))
+        {
+            command.RegisterUse();
+            ScheduleProfileSave();
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanToggleQuickRepeat), AllowConcurrentExecutions = true)]
@@ -1287,13 +1410,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             CommunicationSession session = _session ?? throw new InvalidOperationException("请先建立连接。 ");
             (bool isHex, Encoding encoding, _) = ResolveQuickCommandDataFormat(command);
             byte[] data = BuildSendPayload(
-                command.TemplateOrPayload,
+                command.Payload,
                 isHex,
                 command.LineEnding,
                 command.Checksum,
                 command.ChecksumLittleEndian,
-                encoding,
-                BuildQuickCommandVariables(command));
+                encoding);
             if (data.Length == 0)
             {
                 throw new InvalidOperationException("发送内容为空。 ");
@@ -1420,7 +1542,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         QuickCommandVariableSetItemViewModel variableSet = new(new QuickCommandVariableSet
         {
             Name = $"方案 {sequence}",
-            Variables = GetCommandVariableNames(command.TemplateOrPayload)
+            Variables = GetCommandVariableNames(command.Template)
                 .Select(name => new QuickCommandVariable { Name = name })
                 .ToList()
         });
@@ -1527,7 +1649,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private void AddQuickCommand()
     {
-        QuickCommandItemViewModel command = new(new QuickCommand { Name = "新命令", Payload = string.Empty });
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Name = "新命令",
+            Payload = string.Empty,
+            LineEnding = "CRLF"
+        });
         QuickCommands.Add(command);
         SelectedQuickCommand = command;
         QuickCommandAdded?.Invoke(command);
@@ -1698,9 +1825,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private QuickCommandItemViewModel? FindQuickCommand(QuickCommandVariableSetItemViewModel variableSet) =>
         QuickCommands.FirstOrDefault(command => command.VariableSets.Contains(variableSet));
 
-    private static IReadOnlyDictionary<string, string> BuildQuickCommandVariables(QuickCommandItemViewModel command)
-        => command.SelectedVariableSet?.GetValues() ?? EmptyVariables;
-
     private static IReadOnlyList<string> GetCommandVariableNames(string payload)
         => ByteText.GetVariableNames(payload);
 
@@ -1838,7 +1962,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             return;
         }
-        await _profileStore.DeleteAsync(SelectedProfile.Id).ConfigureAwait(true);
+        Guid profileId = SelectedProfile.Id;
+        await _profileStore.DeleteAsync(profileId).ConfigureAwait(true);
+        _importedProfileSourcePaths.TryRemove(profileId, out _);
+        await SaveAppSettingsAsync().ConfigureAwait(true);
         await ReloadProfilesAsync().ConfigureAwait(true);
     }
 
@@ -1874,6 +2001,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         await _lastAppSettingsSaveTask.ConfigureAwait(true);
         await SaveAppSettingsAsync().ConfigureAwait(true);
         _connectionDesired = false;
+        CancelPendingBaudRateHotSwitch();
         _connectionAttemptCancellation?.Cancel();
         await DisconnectInternalAsync().ConfigureAwait(true);
         _appSettingsSaveLock.Dispose();
@@ -1937,6 +2065,19 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         await _profileStore.SaveAsync(snapshot).ConfigureAwait(false);
+        if (_importedProfileSourcePaths.TryGetValue(snapshot.Id, out string? sourcePath))
+        {
+            try
+            {
+                await _profileFileService.ExportAsync(snapshot, sourcePath).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    $"默认配置已保存，但导入文件覆盖失败：{sourcePath}。{exception.Message}",
+                    exception);
+            }
+        }
     }
 
     private async Task ObserveProfileSaveAsync(Task saveTask)
@@ -2303,7 +2444,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         TerminalRecords.Clear();
         FrameRecords.Clear();
         OnPropertyChanged(nameof(ConnectionButtonText));
-        OnPropertyChanged(nameof(AutoReconnectText));
         OnPropertyChanged(nameof(ConnectionSummary));
         OnPropertyChanged(nameof(TerminalTabHeader));
         ScheduleProfileSave();
@@ -2433,7 +2573,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     partial void OnPortNameChanged(string value) => OnConnectionConfigurationChanged();
-    partial void OnBaudRateChanged(int value) => OnConnectionConfigurationChanged();
+    partial void OnBaudRateChanged(int value)
+    {
+        OnPropertyChanged(nameof(ConnectionSummary));
+        ScheduleProfileSave();
+        ScheduleBaudRateHotSwitch();
+    }
     partial void OnDataBitsChanged(int value) => OnConnectionConfigurationChanged();
     partial void OnSerialParityChanged(SerialParity value) => OnConnectionConfigurationChanged();
     partial void OnSerialStopBitsChanged(SerialStopBits value) => OnConnectionConfigurationChanged();
@@ -2441,18 +2586,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     partial void OnDtrEnableChanged(bool value) => OnConnectionConfigurationChanged();
     partial void OnRtsEnableChanged(bool value) => OnConnectionConfigurationChanged();
     partial void OnReceiveTimeoutMsChanged(int value) => ScheduleProfileSave();
-    partial void OnAutoReconnectChanged(bool value)
-    {
-        ScheduleProfileSave();
-        if (!value && _connectionRetryPending)
-        {
-            _connectionRetryPending = false;
-            _connectionDesired = false;
-            _manualDisconnect = true;
-            _connectionAttemptCancellation?.Cancel();
-            OnPropertyChanged(nameof(ConnectionButtonText));
-        }
-    }
     partial void OnSendRepeatEnabledChanged(bool value) => UpdateSendRepeatState();
     partial void OnSelectedLineEndingChanged(string value)
     {
@@ -2533,6 +2666,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
             SendCommand.NotifyCanExecuteChanged();
             SendQuickCommandCommand.NotifyCanExecuteChanged();
+            SendQuickParameterCommandCommand.NotifyCanExecuteChanged();
             ToggleQuickRepeatCommand.NotifyCanExecuteChanged();
             ToggleQuickParameterRepeatCommand.NotifyCanExecuteChanged();
         }));
@@ -2565,6 +2699,74 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         RequireManualReconnectAfterConfigurationChange();
     }
 
+    private void ScheduleBaudRateHotSwitch()
+    {
+        if (Volatile.Read(ref _disposed) != 0
+            || SelectedTransportKind != TransportKind.Serial
+            || BaudRate <= 0
+            || !_connectionDesired
+            || (!IsConnected && _session is null && _connectionAttemptCancellation is null))
+        {
+            return;
+        }
+
+        CancellationTokenSource source = new();
+        CancellationTokenSource? previous = Interlocked.Exchange(ref _baudRateHotSwitchCancellation, source);
+        previous?.Cancel();
+        _ = ApplyBaudRateHotSwitchAfterDelayAsync(source);
+    }
+
+    private async Task ApplyBaudRateHotSwitchAfterDelayAsync(CancellationTokenSource source)
+    {
+        try
+        {
+            await Task.Delay(250, source.Token).ConfigureAwait(true);
+            if (!ReferenceEquals(_baudRateHotSwitchCancellation, source))
+            {
+                return;
+            }
+
+            Interlocked.CompareExchange(ref _baudRateHotSwitchCancellation, null, source);
+            if (Volatile.Read(ref _disposed) != 0
+                || SelectedTransportKind != TransportKind.Serial
+                || BaudRate <= 0
+                || !_connectionDesired)
+            {
+                return;
+            }
+
+            bool connectionActive = IsConnected
+                || _session is not null
+                || _connectionAttemptCancellation is not null;
+            if (!connectionActive)
+            {
+                return;
+            }
+
+            _manualDisconnect = false;
+            SendRepeatEnabled = false;
+            StopSendRepeat();
+            _connectionAttemptCancellation?.Cancel();
+            IsConnected = false;
+            StatusText = "波特率已改变，正在热切换…";
+            OnPropertyChanged(nameof(ConnectionButtonText));
+            EnsureConnectionStateWorker();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            source.Dispose();
+        }
+    }
+
+    private void CancelPendingBaudRateHotSwitch()
+    {
+        CancellationTokenSource? source = Interlocked.Exchange(ref _baudRateHotSwitchCancellation, null);
+        source?.Cancel();
+    }
+
     private void RequireManualReconnectAfterConfigurationChange()
     {
         bool connectionActive = _connectionDesired
@@ -2575,6 +2777,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             return;
         }
+        CancelPendingBaudRateHotSwitch();
         _connectionDesired = false;
         _manualDisconnect = true;
         SendRepeatEnabled = false;
@@ -2594,8 +2797,47 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     private bool NeedsConnectionStateProcessing() =>
-        _connectionDesired != IsConnected
+        (!_systemSuspended && _connectionDesired != IsConnected)
         || (!_connectionDesired && _session is not null);
+
+    /// <summary>
+    /// 处理 Windows 电源模式切换，睡眠时暂停连接健康判定，唤醒后恢复用户期望的连接。
+    /// </summary>
+    /// <param name="suspending">是否即将进入睡眠；传入 false 表示系统已唤醒。</param>
+    public void HandleSystemPowerModeChanged(bool suspending)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        _systemSuspended = suspending;
+        if (_session?.Transport is SerialPortTransport serialTransport)
+        {
+            serialTransport.SetSystemSuspended(suspending);
+        }
+
+        if (suspending)
+        {
+            _connectionAttemptCancellation?.Cancel();
+            if (_connectionDesired || IsConnected || _session is not null)
+            {
+                StatusText = "系统睡眠，连接将在唤醒后恢复…";
+            }
+            return;
+        }
+
+        if (!_connectionDesired || _manualDisconnect)
+        {
+            return;
+        }
+
+        // USB 串口设备可能在唤醒时被 Windows 重新枚举，主动重建会话比复用旧句柄可靠。
+        IsConnected = false;
+        StatusText = "系统已唤醒，正在恢复连接…";
+        OnPropertyChanged(nameof(ConnectionButtonText));
+        EnsureConnectionStateWorker();
+    }
 
     private async Task ProcessConnectionStateAsync()
     {
@@ -3004,33 +3246,22 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        if (_systemSuspended)
+        {
+            StatusText = "系统睡眠期间连接暂不可用，唤醒后正在恢复…";
+            return;
+        }
+
         TransportKind faultedKind = faultedSession.Transport.Kind;
         StatusText = faultedKind == TransportKind.TcpServer
             ? $"监听异常：{exception.Message}"
             : $"连接异常：{exception.Message}";
         IsConnected = false;
-        bool shouldReconnect = !_manualDisconnect && _connectionDesired && AutoReconnect;
-        if (!shouldReconnect)
-        {
-            _connectionDesired = false;
-            OnPropertyChanged(nameof(ConnectionButtonText));
-        }
-        else
-        {
-            _connectionRetryPending = true;
-            StatusText = faultedKind == TransportKind.TcpServer
-                ? "监听中断，2 秒后重新监听…"
-                : "连接中断，2 秒后重连…";
-            await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(true);
-            _connectionRetryPending = false;
-        }
+        _connectionDesired = false;
+        OnPropertyChanged(nameof(ConnectionButtonText));
 
         await Task.Yield();
         await DisconnectInternalAsync().ConfigureAwait(true);
-        if (shouldReconnect && _connectionDesired && !_manualDisconnect && AutoReconnect)
-        {
-            EnsureConnectionStateWorker();
-        }
     }
 
     private void OnUiTimerTick(object? sender, EventArgs args)
@@ -3349,25 +3580,27 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         if (args.PropertyName is nameof(QuickCommandItemViewModel.Payload)
             or nameof(QuickCommandItemViewModel.Template)
-            or nameof(QuickCommandItemViewModel.TemplateOrPayload)
+            or nameof(QuickCommandItemViewModel.ResolvedPayload)
             or nameof(QuickCommandItemViewModel.VariableSets))
         {
             RefreshSendCommandAvailability();
         }
         if (sender is QuickCommandItemViewModel changedCommand)
         {
-            bool payloadChanged = args.PropertyName is nameof(QuickCommandItemViewModel.Payload)
-                or nameof(QuickCommandItemViewModel.Template)
-                or nameof(QuickCommandItemViewModel.TemplateOrPayload)
-                or nameof(QuickCommandItemViewModel.LineEnding)
+            bool sharedPayloadSettingsChanged = args.PropertyName is nameof(QuickCommandItemViewModel.LineEnding)
                 or nameof(QuickCommandItemViewModel.Checksum)
-                or nameof(QuickCommandItemViewModel.ChecksumLittleEndian)
+                or nameof(QuickCommandItemViewModel.ChecksumLittleEndian);
+            bool directPayloadChanged = args.PropertyName == nameof(QuickCommandItemViewModel.Payload)
+                || sharedPayloadSettingsChanged;
+            bool parameterPayloadChanged = (args.PropertyName is nameof(QuickCommandItemViewModel.Template)
+                or nameof(QuickCommandItemViewModel.ResolvedPayload)
                 or nameof(QuickCommandItemViewModel.SelectedVariableSet)
-                or nameof(QuickCommandItemViewModel.VariableSets);
+                or nameof(QuickCommandItemViewModel.VariableSets))
+                || sharedPayloadSettingsChanged;
             bool mainRepeatStopped = changedCommand.IsRepeating
-                && (payloadChanged || args.PropertyName == nameof(QuickCommandItemViewModel.RepeatIntervalMs));
+                && (directPayloadChanged || args.PropertyName == nameof(QuickCommandItemViewModel.RepeatIntervalMs));
             bool parameterRepeatStopped = changedCommand.IsParameterRepeating
-                && (payloadChanged || args.PropertyName == nameof(QuickCommandItemViewModel.ParameterRepeatIntervalMs));
+                && (parameterPayloadChanged || args.PropertyName == nameof(QuickCommandItemViewModel.ParameterRepeatIntervalMs));
             if (mainRepeatStopped)
             {
                 StopQuickCommandMainRepeat(changedCommand);
@@ -3603,6 +3836,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        string? importedSourcePath = _importedProfileSourcePaths.TryGetValue(snapshot.Id, out string? sourcePath)
+            ? sourcePath
+            : null;
         try
         {
             await QueueProfileSave(snapshot).ConfigureAwait(true);
@@ -3637,7 +3873,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (showStatus)
         {
-            StatusText = $"设备配置已保存：{_profileStore.DirectoryPath}";
+            StatusText = importedSourcePath is null
+                ? $"设备配置已保存：{_profileStore.DirectoryPath}"
+                : $"设备配置已保存，并覆盖导入文件：{importedSourcePath}";
         }
     }
 
@@ -3699,7 +3937,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             SelectedWorkspaceMode = WorkspaceModes.First(option => option.Mode == mode);
             ProfileName = profile.Name;
             SelectedTransportOption = TransportOptions.First(option => option.Kind == profile.Transport.Kind);
-            AutoReconnect = profile.Transport.AutoReconnect;
             switch (profile.Transport)
             {
                 case SerialTransportSettings serial:
@@ -3866,11 +4103,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             StopBits = SerialStopBits,
             Handshake = SerialHandshake,
             DtrEnable = DtrEnable,
-            RtsEnable = RtsEnable,
-            AutoReconnect = AutoReconnect
+            RtsEnable = RtsEnable
         },
-        TransportKind.TcpClient => new TcpClientTransportSettings { Host = Host, Port = RemotePort, AutoReconnect = AutoReconnect },
-        TransportKind.TcpServer => new TcpServerTransportSettings { LocalAddress = LocalAddress, Port = LocalPort, AutoReconnect = AutoReconnect },
+        TransportKind.TcpClient => new TcpClientTransportSettings { Host = Host, Port = RemotePort },
+        TransportKind.TcpServer => new TcpServerTransportSettings { LocalAddress = LocalAddress, Port = LocalPort },
         TransportKind.Udp => new UdpTransportSettings
         {
             LocalAddress = LocalAddress,
@@ -3878,8 +4114,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             RemoteAddress = Host,
             RemotePort = RemotePort,
             EnableBroadcast = UdpBroadcast,
-            MulticastAddress = string.IsNullOrWhiteSpace(MulticastAddress) ? null : MulticastAddress,
-            AutoReconnect = AutoReconnect
+            MulticastAddress = string.IsNullOrWhiteSpace(MulticastAddress) ? null : MulticastAddress
         },
         TransportKind.BleGatt => new BleGattTransportSettings
         {
@@ -3888,8 +4123,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             ReadCharacteristicUuid = BleReadUuid,
             WriteCharacteristicUuid = BleWriteUuid,
             NotifyCharacteristicUuid = BleNotifyUuid,
-            WriteWithoutResponse = BleWriteWithoutResponse,
-            AutoReconnect = AutoReconnect
+            WriteWithoutResponse = BleWriteWithoutResponse
         },
         _ => throw new NotSupportedException()
     };
@@ -4079,6 +4313,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             {
                 ProfileDirectory = _profileStore.DirectoryPath,
                 SelectedProfileId = SelectedProfile?.Id,
+                ImportedProfileSourcePaths = _importedProfileSourcePaths.ToDictionary(
+                    item => item.Key,
+                    item => item.Value),
                 TerminalFontSize = TerminalFontSize,
                 TerminalTimeColumnWidth = TerminalTimeColumnWidth,
                 TerminalDirectionColumnWidth = TerminalDirectionColumnWidth,
