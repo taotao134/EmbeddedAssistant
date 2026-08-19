@@ -147,6 +147,14 @@ public partial class MainWindow : FluentWindow
             ScrollBar.PreviewMouseDownEvent,
             new MouseButtonEventHandler(OnTerminalScrollBarPreviewMouseDown),
             true);
+        TerminalList.AddHandler(
+            ScrollBar.PreviewMouseUpEvent,
+            new MouseButtonEventHandler(OnTerminalScrollBarPreviewMouseUp),
+            true);
+        TerminalList.AddHandler(
+            Mouse.PreviewMouseWheelEvent,
+            new MouseWheelEventHandler(OnTerminalListPreviewMouseWheel),
+            true);
         FrameList.AddHandler(
             Thumb.DragDeltaEvent,
             new DragDeltaEventHandler(OnFrameColumnHeaderDragDelta),
@@ -451,21 +459,67 @@ public partial class MainWindow : FluentWindow
 
     private void OnTerminalScrollBarPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (e.ChangedButton != MouseButton.Left)
+        {
+            return;
+        }
+
+        SuspendTerminalAutoScrollForUserInput();
+    }
+
+    private void OnTerminalScrollBarPreviewMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left)
+        {
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(
+            DispatcherPriority.ContextIdle,
+            new Action(ReconcileTerminalAutoScrollState));
+    }
+
+    private void OnTerminalListPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            return;
+        }
+
+        ScrollViewer? viewer = FindVisualChild<ScrollViewer>(TerminalList);
+        if (viewer is not null && CanScroll(viewer, e.Delta))
+        {
+            SuspendTerminalAutoScrollForUserInput();
+            _ = Dispatcher.BeginInvoke(
+                DispatcherPriority.ContextIdle,
+                new Action(ReconcileTerminalAutoScrollState));
+        }
+    }
+
+    private void SuspendTerminalAutoScrollForUserInput()
+    {
         _terminalAutoScrollSuspended = true;
         _terminalAutoScrollGeneration++;
+    }
+
+    private void ReconcileTerminalAutoScrollState()
+    {
+        ScrollViewer? viewer = FindVisualChild<ScrollViewer>(TerminalList);
+        if (viewer is not null && viewer.VerticalOffset >= viewer.ScrollableHeight - 2)
+        {
+            _terminalAutoScrollSuspended = false;
+        }
     }
 
     private void OnTerminalListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         ScrollViewer? viewer = e.OriginalSource as ScrollViewer ?? FindVisualChild<ScrollViewer>(TerminalList);
-        if (viewer is not null && Math.Abs(e.ExtentHeightChange) < 0.01)
+        // 布局和虚拟化同样会触发 ScrollChanged，不能据此推断用户已离开底部。
+        if (viewer is not null
+            && Math.Abs(e.ExtentHeightChange) < 0.01
+            && viewer.VerticalOffset >= viewer.ScrollableHeight - 2)
         {
-            bool atBottom = viewer.VerticalOffset >= viewer.ScrollableHeight - 2;
-            _terminalAutoScrollSuspended = !atBottom;
-            if (_terminalAutoScrollSuspended)
-            {
-                _terminalAutoScrollGeneration++;
-            }
+            _terminalAutoScrollSuspended = false;
         }
 
         double viewportWidth = GetTerminalViewportWidth();
@@ -856,7 +910,11 @@ public partial class MainWindow : FluentWindow
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainWindowViewModel.AutoScroll))
+        if (e.PropertyName == nameof(MainWindowViewModel.IsPowerShellWorkspace))
+        {
+            EnforcePanelLayout();
+        }
+        else if (e.PropertyName == nameof(MainWindowViewModel.AutoScroll))
         {
             if (_viewModel.AutoScroll)
             {
@@ -1076,6 +1134,20 @@ public partial class MainWindow : FluentWindow
 
     private void OnTerminalPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) == ModifierKeys.None
+            && e.Key is Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End)
+        {
+            ScrollViewer? viewer = FindVisualChild<ScrollViewer>(TerminalList);
+            int direction = e.Key is Key.Up or Key.PageUp or Key.Home ? 1 : -1;
+            if (viewer is not null && CanScroll(viewer, direction))
+            {
+                SuspendTerminalAutoScrollForUserInput();
+                _ = Dispatcher.BeginInvoke(
+                    DispatcherPriority.ContextIdle,
+                    new Action(ReconcileTerminalAutoScrollState));
+            }
+        }
+
         if ((Keyboard.Modifiers & ModifierKeys.Control) == 0)
         {
             return;
@@ -2296,6 +2368,217 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    private void OnTftpBrowseLocalFileClick(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.TftpClient.IsBusy)
+        {
+            return;
+        }
+
+        string? initialDirectory = null;
+        try
+        {
+            string configuredDirectory = _viewModel.TftpClient.LocalDirectory.Trim();
+            if (Directory.Exists(configuredDirectory))
+            {
+                initialDirectory = configuredDirectory;
+            }
+            else
+            {
+                string currentPath = _viewModel.TftpClient.LocalFile.Trim();
+                if (File.Exists(currentPath))
+                {
+                    initialDirectory = Path.GetDirectoryName(currentPath);
+                }
+                else if (Directory.Exists(currentPath))
+                {
+                    initialDirectory = currentPath;
+                }
+            }
+        }
+        catch (ArgumentException)
+        {
+        }
+
+        OpenFileDialog dialog = new()
+        {
+            Title = "选择 TFTP 本地文件",
+            Filter = "固件文件 (*.bin;*.hex;*.srec;*.elf)|*.bin;*.hex;*.srec;*.elf|所有文件 (*.*)|*.*",
+            InitialDirectory = string.IsNullOrWhiteSpace(initialDirectory) ? string.Empty : initialDirectory
+        };
+        if (dialog.ShowDialog(this) == true)
+        {
+            _viewModel.TftpClient.SetLocalFile(dialog.FileName);
+        }
+    }
+
+    private void OnTftpBrowseLocalDirectoryClick(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.TftpClient.IsBusy)
+        {
+            return;
+        }
+
+        string initialDirectory = _viewModel.TftpClient.LocalDirectory.Trim();
+        if (!Directory.Exists(initialDirectory))
+        {
+            initialDirectory = Path.GetDirectoryName(_viewModel.TftpClient.LocalFile.Trim()) ?? string.Empty;
+        }
+
+        OpenFolderDialog dialog = new()
+        {
+            Title = "选择 TFTP 文件夹",
+            InitialDirectory = initialDirectory,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) == true)
+        {
+            _viewModel.TftpClient.SetLocalDirectory(dialog.FolderName);
+        }
+    }
+
+    private void OnTftpLogTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (sender is TextBox textBox && textBox.SelectionLength == 0)
+        {
+            textBox.ScrollToEnd();
+        }
+    }
+
+    private async void OnPowerShellLoaded(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.PowerShell.EnsureStartedAsync();
+    }
+
+    private void OnPowerShellOutputTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (sender is TextBox textBox && textBox.SelectionLength == 0)
+        {
+            textBox.ScrollToEnd();
+        }
+    }
+
+    private async void OnPowerShellControlPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is TextBox textBox)
+        {
+            await HandlePowerShellControlKeyAsync(textBox, e);
+        }
+    }
+
+    private async void OnPowerShellCommandPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox textBox)
+        {
+            return;
+        }
+
+        if (await HandlePowerShellControlKeyAsync(textBox, e))
+        {
+            return;
+        }
+
+        if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None)
+        {
+            e.Handled = true;
+            await _viewModel.PowerShell.ExecuteCommandCommand.ExecuteAsync(null);
+            return;
+        }
+
+        if (Keyboard.Modifiers == ModifierKeys.None && e.Key is Key.Up or Key.Down)
+        {
+            e.Handled = true;
+            _viewModel.PowerShell.NavigateHistory(e.Key == Key.Up ? -1 : 1);
+        }
+    }
+
+    private async Task<bool> HandlePowerShellControlKeyAsync(TextBox textBox, KeyEventArgs e)
+    {
+        ModifierKeys modifiers = e.KeyboardDevice.Modifiers;
+        if ((modifiers & ModifierKeys.Control) == 0
+            || (modifiers & (ModifierKeys.Alt | ModifierKeys.Windows)) != 0)
+        {
+            return false;
+        }
+
+        if (e.Key == Key.C)
+        {
+            // 选中文本时保留 WPF 的复制行为；无选择内容才代表终端中的取消操作。
+            if (textBox.SelectionLength > 0)
+            {
+                return false;
+            }
+
+            e.Handled = true;
+            if (ReferenceEquals(textBox, PowerShellCommandTextBox))
+            {
+                _viewModel.PowerShell.CommandText = string.Empty;
+            }
+
+            // 空闲时也发送 Ctrl+C，让终端像真实 PowerShell 一样回显 ^C 并换行。
+            await _viewModel.PowerShell.SendControlAsync(PowerShellControlKey.Cancel);
+
+            return true;
+        }
+
+        if (e.Key is Key.Pause or Key.Cancel)
+        {
+            e.Handled = true;
+            await _viewModel.PowerShell.SendControlAsync(PowerShellControlKey.Break);
+            return true;
+        }
+
+        if (e.Key == Key.D)
+        {
+            if (!_viewModel.PowerShell.IsBusy
+                && ReferenceEquals(textBox, PowerShellCommandTextBox)
+                && textBox.CaretIndex < textBox.Text.Length)
+            {
+                textBox.Select(textBox.CaretIndex, 1);
+                textBox.SelectedText = string.Empty;
+                e.Handled = true;
+                return true;
+            }
+
+            e.Handled = true;
+            await _viewModel.PowerShell.SendControlAsync(PowerShellControlKey.EndOfFile);
+            return true;
+        }
+
+        if (e.Key == Key.Z && _viewModel.PowerShell.IsBusy)
+        {
+            e.Handled = true;
+            await _viewModel.PowerShell.SendControlAsync(PowerShellControlKey.Suspend);
+            return true;
+        }
+
+        if (e.Key == Key.L)
+        {
+            e.Handled = true;
+            _viewModel.PowerShell.ClearCommand.Execute(null);
+            return true;
+        }
+
+        if (e.Key == Key.U && ReferenceEquals(textBox, PowerShellCommandTextBox))
+        {
+            e.Handled = true;
+            textBox.SelectAll();
+            textBox.SelectedText = string.Empty;
+            return true;
+        }
+
+        if (e.Key == Key.K && ReferenceEquals(textBox, PowerShellCommandTextBox))
+        {
+            e.Handled = true;
+            int length = Math.Max(0, textBox.Text.Length - textBox.CaretIndex);
+            textBox.Select(textBox.CaretIndex, length);
+            textBox.SelectedText = string.Empty;
+            return true;
+        }
+
+        return false;
+    }
+
     private async void OnImportFrameTemplateClick(object sender, RoutedEventArgs e)
     {
         OpenFileDialog dialog = new()
@@ -2392,6 +2675,11 @@ public partial class MainWindow : FluentWindow
 
     private void OnToggleCommandPanelClick(object sender, RoutedEventArgs e)
     {
+        if (_viewModel.IsPowerShellWorkspace)
+        {
+            return;
+        }
+
         if (_sidebarFocus == SidebarFocus.Command)
         {
             _sidebarFocus = SidebarFocus.None;
@@ -2451,7 +2739,8 @@ public partial class MainWindow : FluentWindow
     }
 
     private bool CanDockCommandPanel(double totalWidth) =>
-        totalWidth >= CurrentWorkspaceMinWidth + CurrentCommandPanelMinWidth + SplitterWidth;
+        !_viewModel.IsPowerShellWorkspace
+        && totalWidth >= CurrentWorkspaceMinWidth + CurrentCommandPanelMinWidth + SplitterWidth;
 
     private bool CanDockDevicePanel(double totalWidth) =>
         totalWidth >= CurrentWorkspaceMinWidth + CurrentDevicePanelMinWidth + SplitterWidth;
@@ -2463,7 +2752,7 @@ public partial class MainWindow : FluentWindow
         {
             required += CurrentDevicePanelMinWidth + SplitterWidth;
         }
-        if (_commandDesiredOpen)
+        if (_commandDesiredOpen && !_viewModel.IsPowerShellWorkspace)
         {
             required += CurrentCommandPanelMinWidth + SplitterWidth;
         }
@@ -2472,6 +2761,11 @@ public partial class MainWindow : FluentWindow
 
     private bool ShouldFocusCommandPanel()
     {
+        if (_viewModel.IsPowerShellWorkspace)
+        {
+            return false;
+        }
+
         double totalWidth = ActualWidth;
         return !CanDockCommandPanel(totalWidth)
             || _deviceDesiredOpen && !CanDockDesiredPanels(totalWidth);
@@ -2481,7 +2775,7 @@ public partial class MainWindow : FluentWindow
     {
         double totalWidth = ActualWidth;
         return !CanDockDevicePanel(totalWidth)
-            || _commandDesiredOpen && !CanDockDesiredPanels(totalWidth);
+            || _commandDesiredOpen && !_viewModel.IsPowerShellWorkspace && !CanDockDesiredPanels(totalWidth);
     }
 
     private void UpdateResponsiveLayout(double totalWidth)
@@ -2682,6 +2976,12 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
+        bool powerShellWorkspace = _viewModel.IsPowerShellWorkspace;
+        if (powerShellWorkspace && _sidebarFocus == SidebarFocus.Command)
+        {
+            _sidebarFocus = SidebarFocus.None;
+        }
+
         if (_sidebarFocus != SidebarFocus.None && CanDockDesiredPanels(totalWidth))
         {
             _sidebarFocus = SidebarFocus.None;
@@ -2695,7 +2995,7 @@ public partial class MainWindow : FluentWindow
         // replacing the workspace or leaving an empty trailing area.
         bool showWorkspace = true;
 
-        if (_sidebarFocus == SidebarFocus.Command)
+        if (_sidebarFocus == SidebarFocus.Command && !powerShellWorkspace)
         {
             commandWidth = Math.Clamp(
                 _commandPanelExpandedWidth.Value,
@@ -2710,7 +3010,7 @@ public partial class MainWindow : FluentWindow
         }
         else
         {
-            commandWidth = _commandDesiredOpen && CanDockCommandPanel(totalWidth)
+            commandWidth = !powerShellWorkspace && _commandDesiredOpen && CanDockCommandPanel(totalWidth)
                 ? ClampCommandPanelWidth(_commandPanelExpandedWidth.Value, totalWidth)
                 : 0;
             double occupied = CurrentWorkspaceMinWidth + (commandWidth > 0 ? commandWidth + SplitterWidth : 0);

@@ -516,6 +516,12 @@
                                                     <DataTrigger Binding="{Binding Mode}" Value="Modbus">
                                                         <Setter Property="Symbol" Value="TableSwitch20" />
                                                     </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Mode}" Value="Tftp">
+                                                        <Setter Property="Symbol" Value="DocumentArrowUp20" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Mode}" Value="PowerShell">
+                                                        <Setter Property="Symbol" Value="Document20" />
+                                                    </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
                                         </ui:SymbolIcon.Style>
@@ -528,12 +534,26 @@
                     </DockPanel>
                 </Border>
 
-                <Border Grid.Row="1"
+                <Border x:Name="ConnectionHeaderBorder"
+                        Grid.Row="1"
                         MinHeight="52"
                         Padding="8,2"
                         Background="{DynamicResource PanelBackgroundBrush}"
                         BorderBrush="{DynamicResource DividerBrush}"
                         BorderThickness="0,0,0,1">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsTftpWorkspace}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsPowerShellWorkspace}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
                     <Grid x:Name="ConnectionHeaderGrid" VerticalAlignment="Center">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -793,6 +813,19 @@
 
                 <TabControl Grid.Row="2" Margin="8,6,8,8" SelectedIndex="{Binding SelectedWorkspaceTabIndex}">
                     <TabItem Header="{Binding TerminalTabHeader}">
+                        <TabItem.Style>
+                            <Style TargetType="TabItem" BasedOn="{StaticResource {x:Type TabItem}}">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsTftpWorkspace}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsPowerShellWorkspace}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TabItem.Style>
                         <Grid PreviewMouseWheel="OnTerminalPreviewMouseWheel">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -1632,6 +1665,218 @@
                             </Grid>
                         </Grid>
                     </TabItem>
+
+                    <TabItem Header="TFTP 客户端" Visibility="{Binding IsTftpWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid Margin="4">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="55" />
+                                <ColumnDefinition Width="90" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,3,6,5" VerticalAlignment="Center" Text="服务器" />
+                            <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,8,5" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding TftpClient.Host, UpdateSourceTrigger=PropertyChanged}" ToolTip="TFTP 服务器的 IPv4 地址或主机名" />
+                            <TextBlock Grid.Row="0" Grid.Column="2" Margin="0,3,6,5" VerticalAlignment="Center" Text="端口" />
+                            <TextBox Grid.Row="0" Grid.Column="3" Margin="0,0,0,5" HorizontalContentAlignment="Center" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding TftpClient.Port, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,3,6,5" VerticalAlignment="Center" Text="本地文件" />
+                            <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,8,5" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding TftpClient.LocalFile, UpdateSourceTrigger=PropertyChanged}" ToolTip="上传时读取、下载时写入的本地路径" />
+                            <Button Grid.Row="1" Grid.Column="3" Margin="0,0,0,5" Style="{StaticResource RoundedButtonStyle}" Click="OnTftpBrowseLocalFileClick" ToolTip="选择本地文件">
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="FolderOpen20" Width="13" Height="13" Margin="0,0,4,0" />
+                                    <TextBlock Text="浏览" />
+                                </StackPanel>
+                            </Button>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,3,6,5" VerticalAlignment="Center" Text="远程文件" />
+                            <TextBox Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,0,0,5" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding TftpClient.RemoteFile, UpdateSourceTrigger=PropertyChanged}" ToolTip="TFTP 服务器上的文件名" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,3,6,5" VerticalAlignment="Center" Text="块大小" />
+                            <ComboBox Grid.Row="3" Grid.Column="1" Width="150" HorizontalAlignment="Left" Margin="0,0,8,5" Style="{StaticResource ConnectionComboBoxStyle}" ItemsSource="{Binding TftpClient.BlockSizes}" SelectedItem="{Binding TftpClient.SelectedBlockSize}" DisplayMemberPath="Name" />
+                            <TextBlock Grid.Row="3" Grid.Column="2" Grid.ColumnSpan="2" Margin="0,3,0,5" VerticalAlignment="Center" Foreground="{DynamicResource MutedTextBrush}" Text="支持块大小协商" />
+
+                            <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4" Margin="0,2,0,8" Orientation="Horizontal">
+                                <Button Margin="0,0,6,0" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding TftpClient.GetCommand}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="FolderOpen20" Width="14" Height="14" Margin="0,0,5,0" />
+                                        <TextBlock Text="下载" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Margin="0,0,6,0" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding TftpClient.PutCommand}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="DocumentArrowUp20" Width="14" Height="14" Margin="0,0,5,0" />
+                                        <TextBlock Text="上传" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource RoundedButtonStyle}" Command="{Binding TftpClient.BreakCommand}" ToolTip="中止当前传输">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="Delete20" Width="14" Height="14" Margin="0,0,5,0" />
+                                        <TextBlock Text="中止" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+
+                            <Grid Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="4" Margin="0,0,0,8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <DockPanel Grid.Row="0" Margin="0,0,0,4">
+                                    <TextBlock DockPanel.Dock="Right" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding TftpClient.ProgressText}" />
+                                    <TextBlock VerticalAlignment="Center" Text="传输进度" />
+                                </DockPanel>
+                                <ProgressBar Grid.Row="1" Height="14" Minimum="0" Maximum="100" Value="{Binding TftpClient.ProgressPercent}" IsIndeterminate="{Binding TftpClient.IsProgressIndeterminate}" />
+                                <Border Grid.Row="2" Margin="0,8,0,0" Background="{DynamicResource TerminalBackgroundBrush}" BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1" CornerRadius="4">
+                                    <TextBox x:Name="TftpLogTextBox"
+                                             Text="{Binding TftpClient.LogText, Mode=OneWay}"
+                                             TextChanged="OnTftpLogTextChanged"
+                                             IsReadOnly="True"
+                                             AcceptsReturn="True"
+                                             BorderThickness="0"
+                                             Background="Transparent"
+                                             FontFamily="Cascadia Mono, Consolas"
+                                             FontSize="11"
+                                             Foreground="{DynamicResource TerminalTextBrush}"
+                                             Padding="8,6"
+                                             TextWrapping="NoWrap"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                        <TextBox.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="复制" Command="{x:Static ApplicationCommands.Copy}" />
+                                                <MenuItem Header="全选" Command="{x:Static ApplicationCommands.SelectAll}" />
+                                            </ContextMenu>
+                                        </TextBox.ContextMenu>
+                                    </TextBox>
+                                </Border>
+                            </Grid>
+
+                            <DockPanel Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="4" Margin="0,0,0,2">
+                                <Button DockPanel.Dock="Right" Width="26" Height="24" Padding="0" Style="{StaticResource CompactIconButtonStyle}" Command="{Binding TftpClient.ClearLogCommand}" ToolTip="清空日志">
+                                    <ui:SymbolIcon Symbol="Delete20" Width="13" Height="13" />
+                                </Button>
+                                <TextBlock VerticalAlignment="Center" Text="{Binding TftpClient.StatusText}" TextTrimming="CharacterEllipsis" />
+                            </DockPanel>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="PowerShell 终端" Visibility="{Binding IsPowerShellWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid Margin="4" Loaded="OnPowerShellLoaded">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <DockPanel Grid.Row="0" Margin="2,0,2,8">
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button Margin="4,0,0,0" Style="{StaticResource RoundedButtonStyle}" Command="{Binding PowerShell.StartCommand}" ToolTip="启动 PowerShell 会话">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:SymbolIcon Symbol="ArrowSync20" Width="14" Height="14" Margin="0,0,5,0" />
+                                            <TextBlock Text="启动" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Margin="4,0,0,0" Style="{StaticResource RoundedButtonStyle}" Command="{Binding PowerShell.RestartCommand}" ToolTip="重新启动 PowerShell 会话">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:SymbolIcon Symbol="ArrowReset20" Width="14" Height="14" Margin="0,0,5,0" />
+                                            <TextBlock Text="重启" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Margin="4,0,0,0" Style="{StaticResource RoundedButtonStyle}" Command="{Binding PowerShell.StopCommand}" ToolTip="停止 PowerShell 会话">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:SymbolIcon Symbol="Delete20" Width="14" Height="14" Margin="0,0,5,0" />
+                                            <TextBlock Text="停止" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Width="28" Height="24" Margin="4,0,0,0" Padding="0" Style="{StaticResource CompactIconButtonStyle}" Command="{Binding PowerShell.ClearCommand}" ToolTip="清空终端">
+                                        <ui:SymbolIcon Symbol="Delete20" Width="13" Height="13" />
+                                    </Button>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource SectionLabelStyle}" FontSize="14" Text="PowerShell 终端" />
+                                    <TextBlock Margin="10,2,0,0" VerticalAlignment="Center" Foreground="{DynamicResource MutedTextBrush}" Text="Windows PowerShell" />
+                                </StackPanel>
+                            </DockPanel>
+
+                            <Border Grid.Row="1"
+                                    Background="{DynamicResource TerminalBackgroundBrush}"
+                                    BorderBrush="{DynamicResource DividerBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4">
+                                <TextBox x:Name="PowerShellOutputTextBox"
+                                         Text="{Binding PowerShell.OutputText, Mode=OneWay}"
+                                         TextChanged="OnPowerShellOutputTextChanged"
+                                         PreviewKeyDown="OnPowerShellControlPreviewKeyDown"
+                                         IsReadOnly="True"
+                                         AcceptsReturn="True"
+                                         BorderThickness="0"
+                                         Background="Transparent"
+                                         Foreground="{DynamicResource TerminalTextBrush}"
+                                         FontFamily="Cascadia Mono, Consolas"
+                                         FontSize="12"
+                                         Padding="10,8"
+                                         TextWrapping="NoWrap"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         SelectionBrush="{DynamicResource AccentSoftBrush}">
+                                    <TextBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="复制" Command="{x:Static ApplicationCommands.Copy}" />
+                                            <MenuItem Header="全选" Command="{x:Static ApplicationCommands.SelectAll}" />
+                                            <Separator />
+                                            <MenuItem Header="清空终端" Command="{Binding PowerShell.ClearCommand}" />
+                                        </ContextMenu>
+                                    </TextBox.ContextMenu>
+                                </TextBox>
+                            </Border>
+
+                            <Grid Grid.Row="2" Margin="0,8,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="76" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="PowerShellCommandTextBox"
+                                         Grid.Column="0"
+                                         MinHeight="32"
+                                         Padding="8,4"
+                                         VerticalContentAlignment="Center"
+                                         Style="{StaticResource CompactTextBoxStyle}"
+                                         Text="{Binding PowerShell.CommandText, UpdateSourceTrigger=PropertyChanged}"
+                                         PreviewKeyDown="OnPowerShellCommandPreviewKeyDown"
+                                         ToolTip="输入 PowerShell 命令后按回车执行；上、下方向键浏览历史命令；执行中可按 Ctrl+C 中断" />
+                                <Button Grid.Column="1" Margin="6,0,0,0" MinHeight="32" Style="{StaticResource PrimaryButtonStyle}" Command="{Binding PowerShell.ExecuteCommandCommand}">
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <ui:SymbolIcon Symbol="Send20" Width="14" Height="14" Margin="0,0,5,0" />
+                                        <TextBlock Text="执行" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+
+                            <DockPanel Grid.Row="3" Margin="2,0,2,2">
+                                <TextBlock DockPanel.Dock="Right"
+                                           MaxWidth="520"
+                                           Margin="12,0,0,0"
+                                           HorizontalAlignment="Right"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           Text="{Binding PowerShell.WorkingDirectory}"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding PowerShell.WorkingDirectory}" />
+                                <TextBlock Foreground="{DynamicResource MutedTextBrush}" Text="{Binding PowerShell.StatusText}" TextTrimming="CharacterEllipsis" />
+                            </DockPanel>
+                        </Grid>
+                    </TabItem>
                 </TabControl>
             </Grid>
 
@@ -1652,16 +1897,23 @@
                     BorderBrush="{DynamicResource DividerBrush}"
                     BorderThickness="1,0,0,0">
                 <Grid>
+                    <Grid x:Name="QuickCommandPanelGrid">
                     <Grid.Style>
-                        <Style TargetType="Grid">
-                            <Setter Property="Margin" Value="8" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                             Value="Compact">
-                                    <Setter Property="Margin" Value="6" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
+                            <Style TargetType="Grid">
+                                <Setter Property="Margin" Value="8" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                 Value="Compact">
+                                        <Setter Property="Margin" Value="6" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsTftpWorkspace}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsPowerShellWorkspace}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
                     </Grid.Style>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -2589,6 +2841,129 @@
                                 Click="OnCollapseQuickCommandEditorClick">
                             <ui:SymbolIcon Symbol="ChevronDown20" Width="13" Height="13" FontSize="13" />
                         </Button>
+                    </Grid>
+
+                    </Grid>
+
+                    <Grid Grid.Row="0"
+                          Grid.RowSpan="4"
+                          Margin="2,0,2,0"
+                          Visibility="{Binding IsTftpWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <DockPanel Grid.Row="0" Margin="2,0,2,8">
+                            <TextBlock DockPanel.Dock="Right"
+                                       Margin="8,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       Text="{Binding TftpClient.StatusText}"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock VerticalAlignment="Center"
+                                       Style="{StaticResource SectionLabelStyle}"
+                                       FontSize="14"
+                                       Text="TFTP 配置" />
+                        </DockPanel>
+
+                        <Grid Grid.Row="1" Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="68" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="30" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Text="文件夹地址" />
+                            <TextBox Grid.Column="1"
+                                     Margin="0,0,6,0"
+                                     Style="{StaticResource CompactTextBoxStyle}"
+                                     Text="{Binding TftpClient.LocalDirectory, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="TFTP 本地文件所在文件夹" />
+                            <Button Grid.Column="2"
+                                    Width="28"
+                                    Height="24"
+                                    Padding="0"
+                                    Style="{StaticResource CompactIconButtonStyle}"
+                                    Click="OnTftpBrowseLocalDirectoryClick"
+                                    ToolTip="选择 TFTP 文件夹">
+                                <ui:SymbolIcon Symbol="FolderOpen20" Width="14" Height="14" />
+                            </Button>
+                        </Grid>
+
+                        <Grid Grid.Row="2" Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="68" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="30" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Text="本地文件" />
+                            <TextBox Grid.Column="1"
+                                     Margin="0,0,6,0"
+                                     Style="{StaticResource CompactTextBoxStyle}"
+                                     Text="{Binding TftpClient.LocalFile, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="上传时读取、下载时写入的本地文件" />
+                            <Button Grid.Column="2"
+                                    Width="28"
+                                    Height="24"
+                                    Padding="0"
+                                    Style="{StaticResource CompactIconButtonStyle}"
+                                    Click="OnTftpBrowseLocalFileClick"
+                                    ToolTip="选择 TFTP 本地文件">
+                                <ui:SymbolIcon Symbol="Document20" Width="14" Height="14" />
+                            </Button>
+                        </Grid>
+
+                        <Grid Grid.Row="3" Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="68" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="40" />
+                                <ColumnDefinition Width="72" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Text="服务器 IP" />
+                            <TextBox Grid.Column="1"
+                                     Margin="0,0,8,0"
+                                     Style="{StaticResource CompactTextBoxStyle}"
+                                     Text="{Binding TftpClient.Host, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="TFTP 服务器的 IPv4 地址或主机名" />
+                            <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="端口" />
+                            <TextBox Grid.Column="3"
+                                     HorizontalContentAlignment="Center"
+                                     Style="{StaticResource CompactTextBoxStyle}"
+                                     Text="{Binding TftpClient.Port, UpdateSourceTrigger=PropertyChanged}" />
+                        </Grid>
+
+                        <Grid Grid.Row="4" Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="68" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Text="远程文件" />
+                            <TextBox Grid.Column="1"
+                                     Style="{StaticResource CompactTextBoxStyle}"
+                                     Text="{Binding TftpClient.RemoteFile, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="TFTP 服务器上的文件名" />
+                        </Grid>
+
+                        <Grid Grid.Row="5">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="68" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Text="块大小" />
+                            <ComboBox Grid.Column="1"
+                                      Width="150"
+                                      HorizontalAlignment="Left"
+                                      Style="{StaticResource ConnectionComboBoxStyle}"
+                                      ItemsSource="{Binding TftpClient.BlockSizes}"
+                                      SelectedItem="{Binding TftpClient.SelectedBlockSize}"
+                                      DisplayMemberPath="Name" />
+                        </Grid>
                     </Grid>
 
                 </Grid>

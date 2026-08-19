@@ -8,7 +8,9 @@ public enum WorkspaceMode
     Serial,
     Network,
     Bluetooth,
-    Modbus
+    Modbus,
+    Tftp,
+    PowerShell
 }
 
 public enum QuickCommandCategory
@@ -31,11 +33,22 @@ public sealed record DeviceProfile
     public WorkspaceMode WorkspaceMode { get; init; } = WorkspaceMode.Serial;
     public TransportSettings Transport { get; init; } = new SerialTransportSettings();
     public TerminalPreferences Terminal { get; init; } = new();
+    public TftpPreferences Tftp { get; init; } = new();
     public List<QuickCommandGroup> CommandGroups { get; init; } = [];
     public FrameTemplate FrameTemplate { get; init; } = new();
     public List<FrameTemplate> FrameTemplates { get; init; } = [];
     public List<ChartBinding> ChartBindings { get; init; } = [];
     public DateTimeOffset UpdatedAt { get; init; } = DateTimeOffset.Now;
+}
+
+public sealed record TftpPreferences
+{
+    public string Host { get; init; } = "192.168.1.26";
+    public int Port { get; init; } = 69;
+    public string LocalDirectory { get; init; } = string.Empty;
+    public string LocalFile { get; init; } = string.Empty;
+    public string RemoteFile { get; init; } = string.Empty;
+    public int BlockSize { get; init; } = 512;
 }
 
 public sealed record TerminalPreferences

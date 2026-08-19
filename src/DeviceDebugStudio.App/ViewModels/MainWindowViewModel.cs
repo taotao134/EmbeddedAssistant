@@ -141,6 +141,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _updateService = updateService;
         _bleDiscovery = bleDiscovery;
         _bleGattBrowser = bleGattBrowser;
+        TftpClient.PreferencesChanged += OnTftpPreferencesChanged;
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         selectedTransportOption = TransportOptions[0];
         selectedWorkspaceMode = WorkspaceModes[0];
@@ -227,7 +228,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         new(WorkspaceMode.Serial, "串口"),
         new(WorkspaceMode.Network, "TCP / UDP"),
         new(WorkspaceMode.Bluetooth, "蓝牙"),
-        new(WorkspaceMode.Modbus, "Modbus")
+        new(WorkspaceMode.Modbus, "Modbus"),
+        new(WorkspaceMode.Tftp, "TFTP"),
+        new(WorkspaceMode.PowerShell, "PowerShell")
     ];
 
     public IReadOnlyList<QuickCommandCategoryOption> QuickCommandCategories { get; } =
@@ -282,6 +285,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<ColorPaletteItem> TerminalBackgroundPalette { get; } = [];
     public ICollectionView QuickCommandsView { get; }
     public ObservableCollection<ModbusRegisterItem> ModbusRegisters { get; } = [];
+    public TftpClientViewModel TftpClient { get; } = new();
+    public PowerShellViewModel PowerShell { get; } = new();
 
     public event Action<int>? RecordsAppended;
     public event Action<double>? ChartValueAdded;
@@ -578,6 +583,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public bool IsNetworkWorkspace => SelectedWorkspaceMode.Mode == WorkspaceMode.Network;
     public bool IsBluetoothWorkspace => SelectedWorkspaceMode.Mode == WorkspaceMode.Bluetooth;
     public bool IsModbusWorkspace => SelectedWorkspaceMode.Mode == WorkspaceMode.Modbus;
+    public bool IsTftpWorkspace => SelectedWorkspaceMode.Mode == WorkspaceMode.Tftp;
+    public bool IsPowerShellWorkspace => SelectedWorkspaceMode.Mode == WorkspaceMode.PowerShell;
     public bool IsFrameWorkspaceVisible => SelectedWorkspaceMode.Mode is WorkspaceMode.Serial or WorkspaceMode.Network;
     public bool IsChartWorkspaceVisible => SelectedWorkspaceMode.Mode is WorkspaceMode.Serial or WorkspaceMode.Network or WorkspaceMode.Bluetooth;
     public string TerminalTabHeader => IsModbusWorkspace
@@ -1989,6 +1996,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             CancelWithoutThrow(source);
         }
+        await TftpClient.DisposeAsync().ConfigureAwait(true);
+        await PowerShell.DisposeAsync().ConfigureAwait(true);
         await SaveActiveProfileSnapshotAsync(showStatus: false).ConfigureAwait(true);
         try
         {
@@ -2020,8 +2029,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _pendingTerminal.Clear();
             _serialTerminalBuffer.Clear();
             _terminalWaveSeparatorTracker.Reset();
-            TerminalRecords.Clear();
-            FrameRecords.Clear();
             DeviceProfile? snapshot = CreateActiveProfileSnapshot();
             if (snapshot is not null)
             {
@@ -2402,8 +2409,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _pendingTerminal.Clear();
         _serialTerminalBuffer.Clear();
         _terminalWaveSeparatorTracker.Reset();
-        TerminalRecords.Clear();
-        FrameRecords.Clear();
         if (_connectedWorkspaceMode != value.Mode
             && (_connectionDesired
                 || IsConnected
@@ -2417,13 +2422,21 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             WorkspaceMode.Modbus => 3,
             WorkspaceMode.Bluetooth => 4,
+            WorkspaceMode.Tftp => 5,
+            WorkspaceMode.PowerShell => 6,
             _ => 0
         };
+        if (value.Mode == WorkspaceMode.PowerShell)
+        {
+            _ = PowerShell.EnsureStartedAsync();
+        }
         SelectQuickCommandCategoryForWorkspace(value.Mode);
         OnPropertyChanged(nameof(IsSerialWorkspace));
         OnPropertyChanged(nameof(IsNetworkWorkspace));
         OnPropertyChanged(nameof(IsBluetoothWorkspace));
         OnPropertyChanged(nameof(IsModbusWorkspace));
+        OnPropertyChanged(nameof(IsTftpWorkspace));
+        OnPropertyChanged(nameof(IsPowerShellWorkspace));
         OnPropertyChanged(nameof(IsFrameWorkspaceVisible));
         OnPropertyChanged(nameof(IsChartWorkspaceVisible));
         OnPropertyChanged(nameof(TerminalTabHeader));
@@ -2441,14 +2454,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _pendingTerminal.Clear();
         _serialTerminalBuffer.Clear();
         _terminalWaveSeparatorTracker.Reset();
-        TerminalRecords.Clear();
-        FrameRecords.Clear();
         OnPropertyChanged(nameof(ConnectionButtonText));
         OnPropertyChanged(nameof(ConnectionSummary));
         OnPropertyChanged(nameof(TerminalTabHeader));
         ScheduleProfileSave();
         RequireManualReconnectAfterConfigurationChange();
     }
+
+    private void OnTftpPreferencesChanged() => ScheduleProfileSave();
 
     partial void OnSelectedFramingModeChanged(FramingMode value) =>
         OnPropertyChanged(nameof(SelectedFramingModeDescription));
@@ -3503,8 +3516,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             WorkspaceMode.Network => [TransportKind.TcpClient, TransportKind.TcpServer, TransportKind.Udp],
             WorkspaceMode.Bluetooth => [TransportKind.BleGatt],
             WorkspaceMode.Modbus => [TransportKind.Serial],
+            WorkspaceMode.Tftp => [],
+            WorkspaceMode.PowerShell => [],
             _ => [TransportKind.Serial]
         };
+        if (kinds.Length == 0)
+        {
+            AvailableTransportOptions.Clear();
+            OnPropertyChanged(nameof(ConnectionSummary));
+            return;
+        }
         TransportKind previousKind = SelectedTransportOption?.Kind ?? kinds[0];
         AvailableTransportOptions.Clear();
         foreach (TransportKind kind in kinds)
@@ -3976,6 +3997,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                     break;
             }
 
+            TftpClient.ApplyPreferences(profile.Tftp ?? new TftpPreferences());
+
             SelectedEncodingName = profile.Terminal.EncodingName;
             SelectedQuickCommandDataFormat = NormalizeQuickCommandDataFormat(profile.Terminal.QuickCommandDataFormat);
             SendAsHex = profile.Terminal.SendAsHex;
@@ -4082,6 +4105,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             ReceiveTimeoutMs = Math.Clamp(ReceiveTimeoutMs, 1, 5000),
             UiRecordLimit = _activeProfile?.Terminal.UiRecordLimit ?? 100_000
         },
+        Tftp = TftpClient.CreatePreferences(),
         CommandGroups = CreateQuickCommandGroups(),
         FrameTemplate = _frameTemplate,
         FrameTemplates = _frameTemplates.ToList(),
