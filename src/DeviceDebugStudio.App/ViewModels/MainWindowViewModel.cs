@@ -63,6 +63,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly ConcurrentQueue<FrameRecordItem> _pendingFrames = new();
     private readonly ConcurrentQueue<double> _pendingChartValues = new();
     private readonly object _transportDiagnosticLogLock = new();
+    private readonly SemaphoreSlim _captureConfigurationLock = new(1, 1);
+    private readonly object _captureConfigurationGate = new();
     private readonly Dictionary<Guid, CancellationTokenSource> _repeatCommands = [];
     private readonly Dictionary<Guid, CancellationTokenSource> _parameterRepeatCommands = [];
     private readonly Dictionary<QuickCommandCategory, List<QuickCommandItemViewModel>> _quickCommandsByCategory = [];
@@ -119,6 +121,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private long _profileSaveRevision;
     private int _sendCommandAvailabilityRefreshPending;
     private Task _lastAppSettingsSaveTask = Task.CompletedTask;
+    private Task _captureConfigurationTask = Task.CompletedTask;
+    private bool _captureConfigurationStopping;
     private readonly SemaphoreSlim _appSettingsSaveLock = new(1, 1);
     private WorkspaceMode? _connectedWorkspaceMode;
     private int _disposed;
@@ -1983,6 +1987,21 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        Task captureConfigurationTask;
+        lock (_captureConfigurationGate)
+        {
+            _captureConfigurationStopping = true;
+            captureConfigurationTask = _captureConfigurationTask;
+        }
+        try
+        {
+            await captureConfigurationTask.ConfigureAwait(true);
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(exception, "关闭窗口时等待通信记录配置失败");
+        }
+
         _uiTimer.Stop();
         _profileSaveTimer.Stop();
         _appSettingsSaveTimer.Stop();
@@ -2014,6 +2033,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _connectionAttemptCancellation?.Cancel();
         await DisconnectInternalAsync().ConfigureAwait(true);
         _appSettingsSaveLock.Dispose();
+        _captureConfigurationLock.Dispose();
     }
 
     partial void OnSelectedProfileChanged(DeviceProfile? value)
@@ -2496,10 +2516,158 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnCaptureCommunicationChanged(bool value)
     {
-        StatusText = value
-            ? "通信记录已开启，将从下一次连接开始保存"
-            : "通信记录已关闭，后续连接不再自动保存";
+        QueueCaptureConfiguration(value);
     }
+
+    private void QueueCaptureConfiguration(bool enabled)
+    {
+        Task configurationTask;
+        lock (_captureConfigurationGate)
+        {
+            if (_captureConfigurationStopping || Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            configurationTask = ConfigureCaptureAsync(_captureConfigurationTask, enabled);
+            _captureConfigurationTask = configurationTask;
+        }
+
+        _ = ObserveCaptureConfigurationAsync(configurationTask);
+    }
+
+    private async Task ObserveCaptureConfigurationAsync(Task configurationTask)
+    {
+        try
+        {
+            await configurationTask.ConfigureAwait(true);
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(exception, "通信记录配置任务未处理异常");
+        }
+    }
+
+    private async Task ConfigureCaptureAsync(Task previousTask, bool enabled)
+    {
+        try
+        {
+            try
+            {
+                await previousTask.ConfigureAwait(true);
+            }
+            catch (Exception exception)
+            {
+                Log.Warning(exception, "前一通信记录配置任务失败，继续处理最新设置");
+            }
+
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            await _captureConfigurationLock.WaitAsync().ConfigureAwait(true);
+            try
+            {
+                if (Volatile.Read(ref _disposed) != 0)
+                {
+                    return;
+                }
+
+                CommunicationSession? session = _session;
+                if (session is null || !IsConnected)
+                {
+                    StatusText = enabled
+                        ? "通信记录已开启，将从下一次连接开始保存"
+                        : "通信记录已关闭，后续连接不再自动保存";
+                    return;
+                }
+
+                if (!enabled)
+                {
+                    if (session.IsCapturing)
+                    {
+                        await session.StopCaptureAsync().ConfigureAwait(true);
+                    }
+
+                    StatusText = "通信记录已关闭，后续数据不再写入捕获文件";
+                    return;
+                }
+
+                if (session.IsCapturing)
+                {
+                    StatusText = "通信记录正在保存";
+                    return;
+                }
+
+                SqliteCaptureStore captureStore = new();
+                bool captureStoreAccepted = false;
+                try
+                {
+                    await session.StartCaptureAsync(captureStore, BuildCaptureHistory()).ConfigureAwait(true);
+                    captureStoreAccepted = session.IsCapturing;
+                    if (!CaptureCommunication)
+                    {
+                        await session.StopCaptureAsync().ConfigureAwait(true);
+                        return;
+                    }
+
+                    StatusText = string.IsNullOrWhiteSpace(captureStore.FilePath)
+                        ? "通信记录已开启"
+                        : $"通信记录已开启：{captureStore.FilePath}";
+                }
+                catch (Exception exception)
+                {
+                    if (!captureStoreAccepted)
+                    {
+                        try
+                        {
+                            await captureStore.DisposeAsync().ConfigureAwait(true);
+                        }
+                        catch (Exception disposeException)
+                        {
+                            Log.Warning(disposeException, "通信记录开启失败后的存储清理失败");
+                        }
+                    }
+                    StatusText = enabled
+                        ? $"通信记录开启失败：{exception.Message}"
+                        : $"通信记录关闭失败：{exception.Message}";
+                }
+            }
+            finally
+            {
+                _captureConfigurationLock.Release();
+            }
+        }
+        catch (Exception exception)
+        {
+            if (Volatile.Read(ref _disposed) == 0)
+            {
+                StatusText = enabled
+                    ? $"通信记录开启失败：{exception.Message}"
+                    : $"通信记录关闭失败：{exception.Message}";
+            }
+            Log.Warning(exception, "通信记录配置失败");
+        }
+    }
+
+    private IReadOnlyList<TransportPacket> BuildCaptureHistory() =>
+        TerminalRecords
+            .Select(item => item.IsSeparator
+                ? new TransportPacket(
+                    item.Timestamp,
+                    PacketDirection.Information,
+                    [],
+                    "终端",
+                    BuildTerminalSeparatorLine(item.SeparatorGapMilliseconds))
+                : new TransportPacket(
+                    item.Timestamp,
+                    item.Direction,
+                    item.Data.ToArray(),
+                    item.Endpoint,
+                    item.IsMessage ? item.Content : null,
+                    item.SentAsHex))
+            .ToList();
 
     partial void OnSendTextChanged(string value)
     {
@@ -2906,7 +3074,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 : new NullCaptureStore();
             connectingSession = new CommunicationSession(SelectedProfile?.Name ?? "快速调试", transport, capture);
             connectingSession.Faulted += OnSessionFaulted;
-            await connectingSession.ConnectAsync(cancellationToken).ConfigureAwait(true);
+            await connectingSession.ConnectAsync(
+                    cancellationToken,
+                    CaptureCommunication ? BuildCaptureHistory() : null)
+                .ConfigureAwait(true);
             cancellationToken.ThrowIfCancellationRequested();
             if (!_connectionDesired || SelectedWorkspaceMode.Mode != connectingWorkspace)
             {
@@ -2944,6 +3115,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             {
                 StatusText += " · 正在记录通信";
             }
+            QueueCaptureConfiguration(CaptureCommunication);
         }
         catch (OperationCanceledException)
         {

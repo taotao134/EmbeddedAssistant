@@ -195,13 +195,13 @@
                             Height="16"
                             Margin="8,0,6,0"
                             Background="{DynamicResource DividerBrush}" />
-                    <Button Style="{StaticResource IconButtonStyle}" ToolTip="显示或隐藏设备面板" Click="OnToggleDevicePanelClick">
+                    <Button Style="{StaticResource IconButtonStyle}" ToolTip="打开设备工作区窗口" Click="OnToggleDevicePanelClick">
                         <ui:SymbolIcon Symbol="PanelLeft20" Width="15" Height="15" FontSize="15" />
                     </Button>
                     <Button Style="{StaticResource IconButtonStyle}" ToolTip="切换主题" Click="OnToggleThemeClick">
                         <ui:SymbolIcon Symbol="DarkTheme20" Width="15" Height="15" FontSize="15" />
                     </Button>
-                    <Button Style="{StaticResource IconButtonStyle}" ToolTip="显示或隐藏命令面板" Click="OnToggleCommandPanelClick">
+                    <Button Style="{StaticResource IconButtonStyle}" ToolTip="打开快捷指令窗口" Click="OnToggleCommandPanelClick">
                         <ui:SymbolIcon Symbol="PanelRight20" Width="15" Height="15" FontSize="15" />
                     </Button>
                     <Button Style="{StaticResource IconButtonStyle}" ToolTip="打开捕获数据库" Click="OnOpenCaptureClick">
@@ -224,8 +224,8 @@
                     <ColumnDefinition x:Name="DevicePanelColumn" Width="0" />
                     <ColumnDefinition x:Name="DeviceSplitterColumn" Width="0" />
                     <ColumnDefinition x:Name="WorkspaceColumn" MinWidth="480" Width="*" />
-                    <ColumnDefinition x:Name="CommandSplitterColumn" Width="5" />
-                    <ColumnDefinition x:Name="CommandPanelColumn" MinWidth="480" MaxWidth="620" Width="500" />
+                    <ColumnDefinition x:Name="CommandSplitterColumn" Width="0" />
+                    <ColumnDefinition x:Name="CommandPanelColumn" MinWidth="0" MaxWidth="620" Width="0" />
                 </Grid.ColumnDefinitions>
 
             <Border x:Name="DevicePanelBorder"
@@ -900,6 +900,7 @@
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="34" />
                                             <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="26" />
                                         </Grid.ColumnDefinitions>
                                         <ui:SymbolIcon x:Name="TerminalSearchIcon"
                                                        Grid.Column="0"
@@ -920,6 +921,20 @@
                                                  BorderThickness="0"
                                                  Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                                                  ToolTip="搜索时间、字节、方向、端点或内容" />
+                                        <Button Grid.Column="2"
+                                                Width="24"
+                                                Height="24"
+                                                MinWidth="0"
+                                                MinHeight="0"
+                                                Margin="0,1,2,1"
+                                                Padding="0"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                Foreground="{DynamicResource MutedTextBrush}"
+                                                ToolTip="清除终端搜索"
+                                                Click="OnClearTerminalSearchClick">
+                                            <ui:SymbolIcon Symbol="Dismiss20" Width="13" Height="13" />
+                                        </Button>
                                     </Grid>
                                 </Border>
                             </Grid>
@@ -937,7 +952,9 @@
                                                 CornerRadius="5">
                                             <RichTextBox x:Name="TerminalPlainTextBox"
                                                          Style="{StaticResource TerminalPlainTextBoxStyle}"
-                                                         FontSize="{Binding TerminalFontSize}">
+                                                         FontSize="{Binding TerminalFontSize}"
+                                                         PreviewMouseWheel="OnTerminalPlainTextPreviewMouseWheel"
+                                                         SelectionChanged="OnTerminalPlainTextSelectionChanged">
                                                 <RichTextBox.Document>
                                                     <FlowDocument PagePadding="0">
                                                         <Paragraph Margin="0" />
@@ -1976,7 +1993,7 @@
                         </Grid.ColumnDefinitions>
                         <Grid Margin="0,0,6,0">
                             <TextBox Height="26"
-                                     Padding="25,2,5,2"
+                                     Padding="25,2,28,2"
                                      FontSize="11"
                                      VerticalContentAlignment="Center"
                                      Text="{Binding QuickCommandSearchText, UpdateSourceTrigger=PropertyChanged}"
@@ -1986,6 +2003,20 @@
                                            VerticalAlignment="Center"
                                            Symbol="Search20"
                                            IsHitTestVisible="False" />
+                            <Button Width="24"
+                                    Height="24"
+                                    MinWidth="0"
+                                    MinHeight="0"
+                                    Margin="0,1,1,1"
+                                    Padding="0"
+                                    HorizontalAlignment="Right"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Foreground="{DynamicResource MutedTextBrush}"
+                                    ToolTip="清除快捷指令搜索"
+                                    Click="OnClearQuickCommandSearchClick">
+                                <ui:SymbolIcon Symbol="Dismiss20" Width="13" Height="13" />
+                            </Button>
                         </Grid>
                         <ComboBox Grid.Column="1"
                                   Height="26"
@@ -2293,6 +2324,7 @@
                                                              MaxLength="5"
                                                              Validation.ErrorTemplate="{x:Null}"
                                                              Text="{Binding RepeatIntervalText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                             PreviewMouseLeftButtonDown="OnQuickRepeatIntervalPreviewMouseLeftButtonDown"
                                                              LostKeyboardFocus="OnQuickCommandRepeatIntervalLostKeyboardFocus"
                                                              ToolTip="快捷指令循环发送间隔，范围 10~60000 ms" />
                                                     <TextBlock Margin="4,0,6,0"
@@ -2478,6 +2510,7 @@
                                                      BorderThickness="0"
                                                      Background="Transparent"
                                                      PreviewMouseLeftButtonDown="OnQuickVariableSetPreviewMouseLeftButtonDown"
+                                                     PreviewMouseWheel="OnQuickVariableSetPreviewMouseWheel"
                                                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                                      ScrollViewer.VerticalScrollBarVisibility="Disabled">
                                                 <ListBox.Template>
@@ -2810,6 +2843,7 @@
                                                      MaxLength="5"
                                                      Validation.ErrorTemplate="{x:Null}"
                                                      Text="{Binding ParameterRepeatIntervalText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                     PreviewMouseLeftButtonDown="OnQuickParameterRepeatIntervalPreviewMouseLeftButtonDown"
                                                      LostKeyboardFocus="OnQuickParameterRepeatIntervalLostKeyboardFocus"
                                                      ToolTip="快捷参数循环发送间隔，范围 10~60000 ms" />
                                             <TextBlock Grid.Column="5"

@@ -14,9 +14,10 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
 {
     private const string WorkerSwitch = "--device-debug-studio-serial-worker";
     private const string AccessDeniedWorkerErrorPrefix = "ACCESS_DENIED:";
+    private const string PortOpenRetryWorkerErrorPrefix = "PORT_OPEN_RETRY:";
     private const int OpenTimeoutMilliseconds = 3000;
-    private const int AccessDeniedOpenRetryCount = 3;
-    private const int AccessDeniedOpenRetryDelayMilliseconds = 300;
+    private const int AccessDeniedOpenRetryCount = 5;
+    private const int AccessDeniedOpenRetryDelayMilliseconds = 400;
     private const int WorkerStartupTimeoutMilliseconds = 5000;
     private const int WorkerShutdownTimeoutMilliseconds = 1000;
     private const int MaximumFrameLength = 16 * 1024 * 1024;
@@ -792,12 +793,12 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
                 openFailure = null;
                 break;
             }
-            catch (UnauthorizedAccessException exception)
+            catch (Exception exception) when (IsPortOpenRetryableException(exception))
             {
                 openStopwatch.Stop();
                 WriteDebugLog(
                     attemptId,
-                    $"工作进程 SerialPort.Open() 返回 UnauthorizedAccessException：第 {attempt} 次，"
+                    $"工作进程 SerialPort.Open() 返回端口占用类异常：第 {attempt} 次，"
                         + $"耗时={openStopwatch.ElapsedMilliseconds} ms。",
                     exception);
                 openFailure = exception;
@@ -825,7 +826,9 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
         {
             string message = openFailure is UnauthorizedAccessException
                 ? AccessDeniedWorkerErrorPrefix + openFailure.Message
-                : openFailure?.Message ?? "驱动未能将串口置为打开状态。";
+                : openFailure is IOException
+                    ? PortOpenRetryWorkerErrorPrefix + openFailure.Message
+                    : openFailure?.Message ?? "驱动未能将串口置为打开状态。";
             port?.Dispose();
             WriteDebugLog(attemptId, $"工作进程打开失败，已释放 SerialPort 对象，向父进程报告：{message}");
             await TryWriteWorkerErrorAsync(eventPipe, message, CancellationToken.None).ConfigureAwait(false);
@@ -1524,15 +1527,19 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
 
     private string BuildOpenFailureMessage(string reason)
     {
-        if (reason.StartsWith(AccessDeniedWorkerErrorPrefix, StringComparison.Ordinal))
+        if (reason.StartsWith(AccessDeniedWorkerErrorPrefix, StringComparison.Ordinal)
+            || reason.StartsWith(PortOpenRetryWorkerErrorPrefix, StringComparison.Ordinal))
         {
             return $"打开串口 {settings.PortName}（{settings.BaudRate}）失败：端口被其他程序占用，或上一轮关闭尚未完成。"
-                + "已自动重试 3 次；请关闭 SSCOM 等占用该端口的程序后重试。";
+                + $"已自动重试 {AccessDeniedOpenRetryCount} 次；请关闭 SSCOM 等占用该端口的程序后重试。";
         }
 
         return $"打开串口 {settings.PortName}（{settings.BaudRate}）失败：{reason}。"
             + "本次打开已终止并释放，不限制波特率，可直接切换任意波特率重试。";
     }
+
+    private static bool IsPortOpenRetryableException(Exception exception) =>
+        exception is UnauthorizedAccessException or IOException;
 
     private static string ExtractAttemptId(string commandPipeName)
     {

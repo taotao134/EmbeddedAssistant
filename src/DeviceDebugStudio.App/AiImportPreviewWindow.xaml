@@ -1,0 +1,53 @@
+<ui:FluentWindow x:Class="DeviceDebugStudio.App.AiImportPreviewWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="确认 AI 导入提示词"
+                 Icon="Assets/DeviceDebugStudio.ico"
+                 Width="760"
+                 Height="560"
+                 MinWidth="520"
+                 MinHeight="360"
+                 WindowStartupLocation="CenterOwner"
+                 ShowInTaskbar="False"
+                 ResizeMode="CanResize">
+    <Grid Margin="14" Background="{DynamicResource WorkspaceBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock FontSize="14"
+                   FontWeight="SemiBold"
+                   Foreground="{DynamicResource ButtonForegroundBrush}"
+                   Text="即将复制到剪贴板的文字" />
+        <TextBox x:Name="PromptTextBox"
+                 Grid.Row="1"
+                 Margin="0,10,0,12"
+                 Padding="9"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 VerticalScrollBarVisibility="Auto"
+                 HorizontalScrollBarVisibility="Auto"
+                 FontFamily="Cascadia Mono, Consolas"
+                 Background="{DynamicResource PanelBackgroundBrush}"
+                 Foreground="{DynamicResource ButtonForegroundBrush}"
+                 BorderBrush="{DynamicResource DividerBrush}"
+                 BorderThickness="1" />
+        <StackPanel Grid.Row="2"
+                    HorizontalAlignment="Right"
+                    Orientation="Horizontal">
+            <Button Width="82"
+                    Margin="0,0,8,0"
+                    Style="{StaticResource PrimaryButtonStyle}"
+                    Content="复制"
+                    Click="OnCopyClick" />
+            <Button Width="82"
+                    IsCancel="True"
+                    Content="取消"
+                    Click="OnCancelClick" />
+        </StackPanel>
+    </Grid>
+</ui:FluentWindow>

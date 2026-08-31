@@ -68,7 +68,7 @@ public partial class MainWindow : FluentWindow
     private bool _closing;
     private bool _closeApproved;
     private bool _deviceDesiredOpen;
-    private bool _commandDesiredOpen = true;
+    private bool _commandDesiredOpen;
     private SidebarFocus _sidebarFocus;
     private GridLength _devicePanelExpandedWidth = new(232);
     private GridLength _commandPanelExpandedWidth = new(500);
@@ -85,6 +85,7 @@ public partial class MainWindow : FluentWindow
     private int _terminalAutoScrollGeneration;
     private bool _terminalAutoScrollSuspended;
     private int _terminalPlainTextCharacterCount;
+    private bool _terminalPlainTextHadSelection;
     private bool _frameColumnDragActive;
     private double _frameViewportWidth;
     private bool _updatePromptVisible;
@@ -93,6 +94,8 @@ public partial class MainWindow : FluentWindow
     private bool _themeTransitionActive;
     private bool _isCompactLayout;
     private bool _isMinimumLayout;
+    private DeviceWorkspaceWindow? _deviceWorkspaceWindow;
+    private QuickCommandWindow? _quickCommandWindow;
 
     private double CurrentCommandPanelMinWidth =>
         _isMinimumLayout
@@ -154,6 +157,14 @@ public partial class MainWindow : FluentWindow
         TerminalList.AddHandler(
             Mouse.PreviewMouseWheelEvent,
             new MouseWheelEventHandler(OnTerminalListPreviewMouseWheel),
+            true);
+        TerminalPlainTextBox.AddHandler(
+            ScrollBar.PreviewMouseDownEvent,
+            new MouseButtonEventHandler(OnTerminalScrollBarPreviewMouseDown),
+            true);
+        TerminalPlainTextBox.AddHandler(
+            ScrollBar.PreviewMouseUpEvent,
+            new MouseButtonEventHandler(OnTerminalScrollBarPreviewMouseUp),
             true);
         FrameList.AddHandler(
             Thumb.DragDeltaEvent,
@@ -419,13 +430,18 @@ public partial class MainWindow : FluentWindow
 
     private void QueueTerminalAutoScroll()
     {
-        if (_terminalAutoScrollSuspended)
+        if (_terminalAutoScrollSuspended && !IsTerminalAtEnd())
         {
             return;
         }
 
+        if (_terminalAutoScrollSuspended)
+        {
+            _terminalAutoScrollSuspended = false;
+        }
+
         int generation = ++_terminalAutoScrollGeneration;
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        Action scrollAction = () =>
         {
             if (generation != _terminalAutoScrollGeneration || !_viewModel.AutoScroll || _terminalAutoScrollSuspended)
             {
@@ -449,7 +465,10 @@ public partial class MainWindow : FluentWindow
                 TerminalPlainTextBox.CaretPosition = TerminalPlainTextBox.Document.ContentEnd;
                 TerminalPlainTextBox.ScrollToEnd();
             }
-        }));
+        };
+        // 文档和虚拟化列表可能在不同的布局周期才产生最终高度，补一次空闲周期确保滚动到真实底部。
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, scrollAction);
+        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, scrollAction);
     }
 
     private void OnTerminalListSizeChanged(object sender, SizeChangedEventArgs e)
@@ -504,11 +523,23 @@ public partial class MainWindow : FluentWindow
 
     private void ReconcileTerminalAutoScrollState()
     {
-        ScrollViewer? viewer = FindVisualChild<ScrollViewer>(TerminalList);
-        if (viewer is not null && viewer.VerticalOffset >= viewer.ScrollableHeight - 2)
+        if (IsTerminalAtEnd())
         {
             _terminalAutoScrollSuspended = false;
         }
+    }
+
+    private bool IsTerminalAtEnd()
+    {
+        if (TerminalDisplayTabs.SelectedItem == TerminalTableTab)
+        {
+            ScrollViewer? tableViewer = FindVisualChild<ScrollViewer>(TerminalList);
+            return tableViewer is not null
+                && tableViewer.VerticalOffset >= tableViewer.ScrollableHeight - 2;
+        }
+
+        ScrollViewer? textViewer = FindVisualChild<ScrollViewer>(TerminalPlainTextBox);
+        return textViewer is null || textViewer.VerticalOffset >= textViewer.ScrollableHeight - 2;
     }
 
     private void OnTerminalListScrollChanged(object sender, ScrollChangedEventArgs e)
@@ -727,7 +758,38 @@ public partial class MainWindow : FluentWindow
 
         if (!hasSelection && _viewModel.AutoScroll)
         {
-            TerminalPlainTextBox.ScrollToEnd();
+            QueueTerminalAutoScroll();
+        }
+    }
+
+    private void OnTerminalPlainTextPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            return;
+        }
+
+        ScrollViewer? viewer = FindVisualChild<ScrollViewer>(TerminalPlainTextBox);
+        if (viewer is not null && CanScroll(viewer, e.Delta))
+        {
+            SuspendTerminalAutoScrollForUserInput();
+            _ = Dispatcher.BeginInvoke(
+                DispatcherPriority.ContextIdle,
+                new Action(() =>
+                {
+                    ReconcileTerminalAutoScrollState();
+                }));
+        }
+    }
+
+    private void OnTerminalPlainTextSelectionChanged(object sender, RoutedEventArgs e)
+    {
+        bool hasSelection = !TerminalPlainTextBox.Selection.IsEmpty;
+        bool selectionWasCleared = _terminalPlainTextHadSelection && !hasSelection;
+        _terminalPlainTextHadSelection = hasSelection;
+        if (selectionWasCleared && _viewModel.AutoScroll)
+        {
+            QueueTerminalAutoScroll();
         }
     }
 
@@ -846,6 +908,7 @@ public partial class MainWindow : FluentWindow
         TerminalPlainTextBox.Document.Blocks.Clear();
         TerminalPlainTextBox.Document.Blocks.Add(new Paragraph { Margin = new Thickness(0) });
         _terminalPlainTextCharacterCount = 0;
+        _terminalPlainTextHadSelection = false;
     }
 
     private void RebuildTerminalPlainText(int maximumCharacters = int.MaxValue)
@@ -870,6 +933,10 @@ public partial class MainWindow : FluentWindow
         entries.Reverse();
         ResetTerminalPlainTextDocument();
         AppendTerminalPlainTextEntries(entries);
+        if (_viewModel.AutoScroll && TerminalPlainTextBox.Selection.IsEmpty)
+        {
+            QueueTerminalAutoScroll();
+        }
     }
 
     private static bool IsConnectionStatusRecord(TerminalRecordItem item) =>
@@ -919,6 +986,12 @@ public partial class MainWindow : FluentWindow
             if (_viewModel.AutoScroll)
             {
                 _terminalAutoScrollSuspended = false;
+                if (!TerminalPlainTextBox.Selection.IsEmpty)
+                {
+                    TerminalPlainTextBox.Selection.Select(
+                        TerminalPlainTextBox.Document.ContentEnd,
+                        TerminalPlainTextBox.Document.ContentEnd);
+                }
                 QueueTerminalAutoScroll();
             }
             else
@@ -1185,6 +1258,17 @@ public partial class MainWindow : FluentWindow
     {
         TerminalPlainTextBox.Focus();
         TerminalPlainTextBox.SelectAll();
+    }
+
+    private void OnClearTerminalSearchClick(object sender, RoutedEventArgs e)
+    {
+        _viewModel.SearchText = string.Empty;
+        TerminalSearchTextBox.Focus();
+    }
+
+    private void OnClearQuickCommandSearchClick(object sender, RoutedEventArgs e)
+    {
+        _viewModel.QuickCommandSearchText = string.Empty;
     }
 
     private void OnQuickCommandPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -1614,6 +1698,31 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    private void OnQuickRepeatIntervalPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
+        MoveIntervalCaretToEnd(sender);
+
+    private void OnQuickParameterRepeatIntervalPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
+        MoveIntervalCaretToEnd(sender);
+
+    private static void MoveIntervalCaretToEnd(object sender)
+    {
+        if (sender is not TextBox textBox)
+        {
+            return;
+        }
+
+        textBox.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+        {
+            if (!textBox.IsKeyboardFocusWithin)
+            {
+                return;
+            }
+
+            textBox.CaretIndex = textBox.Text.Length;
+            textBox.SelectionLength = 0;
+        }));
+    }
+
     private void OnQuickVariablePreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not TextBox textBox)
@@ -1692,6 +1801,26 @@ public partial class MainWindow : FluentWindow
             textBox.Focus();
             textBox.SelectAll();
         }, DispatcherPriority.Input);
+    }
+
+    private void OnQuickVariableSetPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        DependencyObject source = e.OriginalSource as DependencyObject
+            ?? sender as DependencyObject
+            ?? QuickCommandEditorHost;
+        ScrollViewer? viewer = FindVisualParent<ScrollViewer>(source)
+            ?? FindVisualChild<ScrollViewer>(source);
+        if (viewer is null || viewer.ScrollableWidth <= 0)
+        {
+            return;
+        }
+
+        double detents = e.Delta / 120.0;
+        viewer.ScrollToHorizontalOffset(Math.Clamp(
+            viewer.HorizontalOffset - detents * QuickCommandWheelPixelsPerDetent,
+            0,
+            viewer.ScrollableWidth));
+        e.Handled = true;
     }
 
     private void OnQuickVariableSetNameLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
@@ -2059,8 +2188,13 @@ public partial class MainWindow : FluentWindow
         try
         {
             string prompt = _viewModel.BuildAiImportPrompt(dialog.FolderName);
-            Clipboard.SetText(prompt);
-            _viewModel.StatusText = "AI导入提示词已生成并复制到剪贴板，请粘贴给 Codex。";
+            AiImportPreviewWindow preview = new(prompt)
+            {
+                Owner = this
+            };
+            _viewModel.StatusText = preview.ShowDialog() == true
+                ? "AI导入提示词已复制到剪贴板，请粘贴给 Codex。"
+                : "已取消复制 AI导入提示词";
         }
         catch (Exception exception)
         {
@@ -2675,67 +2809,60 @@ public partial class MainWindow : FluentWindow
 
     private void OnToggleCommandPanelClick(object sender, RoutedEventArgs e)
     {
-        if (_viewModel.IsPowerShellWorkspace)
-        {
-            return;
-        }
-
-        if (_sidebarFocus == SidebarFocus.Command)
-        {
-            _sidebarFocus = SidebarFocus.None;
-            _commandDesiredOpen = false;
-        }
-        else if (_sidebarFocus == SidebarFocus.Device)
-        {
-            _sidebarFocus = SidebarFocus.Command;
-            _commandDesiredOpen = true;
-        }
-        else if (ShouldFocusCommandPanel())
-        {
-            _sidebarFocus = SidebarFocus.Command;
-            _commandDesiredOpen = true;
-        }
-        else
-        {
-            bool opening = !_commandDesiredOpen;
-            _commandDesiredOpen = opening;
-            if (opening && ShouldFocusCommandPanel())
-            {
-                _sidebarFocus = SidebarFocus.Command;
-            }
-        }
-
-        EnforcePanelLayout();
+        ShowQuickCommandWindow();
     }
 
     private void OnToggleDevicePanelClick(object sender, RoutedEventArgs e)
     {
-        if (_sidebarFocus == SidebarFocus.Device)
+        ShowDeviceWorkspaceWindow();
+    }
+
+    private void ShowQuickCommandWindow()
+    {
+        if (_quickCommandWindow is null)
         {
-            _sidebarFocus = SidebarFocus.None;
-            _deviceDesiredOpen = false;
-        }
-        else if (_sidebarFocus == SidebarFocus.Command)
-        {
-            _sidebarFocus = SidebarFocus.Device;
-            _deviceDesiredOpen = true;
-        }
-        else if (ShouldFocusDevicePanel())
-        {
-            _sidebarFocus = SidebarFocus.Device;
-            _deviceDesiredOpen = true;
-        }
-        else
-        {
-            bool opening = !_deviceDesiredOpen;
-            _deviceDesiredOpen = opening;
-            if (opening && ShouldFocusDevicePanel())
+            _quickCommandWindow = new QuickCommandWindow(_viewModel)
             {
-                _sidebarFocus = SidebarFocus.Device;
-            }
+                Owner = this
+            };
+            _quickCommandWindow.Closed += (_, _) => _quickCommandWindow = null;
+            PositionToolWindow(_quickCommandWindow, 1040, 680);
+            _quickCommandWindow.Show();
+        }
+        else if (!_quickCommandWindow.IsVisible)
+        {
+            _quickCommandWindow.Show();
         }
 
-        EnforcePanelLayout();
+        _quickCommandWindow.Activate();
+    }
+
+    private void ShowDeviceWorkspaceWindow()
+    {
+        if (_deviceWorkspaceWindow is null)
+        {
+            _deviceWorkspaceWindow = new DeviceWorkspaceWindow(_viewModel)
+            {
+                Owner = this
+            };
+            _deviceWorkspaceWindow.Closed += (_, _) => _deviceWorkspaceWindow = null;
+            PositionToolWindow(_deviceWorkspaceWindow, 330, 640);
+            _deviceWorkspaceWindow.Show();
+        }
+        else if (!_deviceWorkspaceWindow.IsVisible)
+        {
+            _deviceWorkspaceWindow.Show();
+        }
+
+        _deviceWorkspaceWindow.Activate();
+    }
+
+    private void PositionToolWindow(Window window, double width, double height)
+    {
+        double availableWidth = Math.Max(0, ActualWidth - width);
+        double availableHeight = Math.Max(0, ActualHeight - height);
+        window.Left = Left + Math.Max(20, availableWidth / 2);
+        window.Top = Top + Math.Max(20, availableHeight / 2);
     }
 
     private bool CanDockCommandPanel(double totalWidth) =>
@@ -3201,8 +3328,26 @@ public partial class MainWindow : FluentWindow
         }
         finally
         {
+            CloseToolWindows();
             _closeApproved = true;
             _ = Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(Close));
+        }
+    }
+
+    private void CloseToolWindows()
+    {
+        QuickCommandWindow? quickWindow = _quickCommandWindow;
+        _quickCommandWindow = null;
+        if (quickWindow?.IsVisible == true)
+        {
+            quickWindow.Close();
+        }
+
+        DeviceWorkspaceWindow? deviceWindow = _deviceWorkspaceWindow;
+        _deviceWorkspaceWindow = null;
+        if (deviceWindow?.IsVisible == true)
+        {
+            deviceWindow.Close();
         }
     }
 }
