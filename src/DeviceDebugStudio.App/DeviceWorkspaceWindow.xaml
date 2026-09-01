@@ -9,8 +9,19 @@
                  MinWidth="280"
                  MinHeight="420"
                  WindowStartupLocation="Manual"
-                 ResizeMode="CanResize">
-    <Grid Margin="10" Background="{DynamicResource WorkspaceBackgroundBrush}">
+                 ResizeMode="CanResize"
+                 ExtendsContentIntoTitleBar="True">
+    <Grid Background="{DynamicResource WorkspaceBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="44" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0"
+                     Icon="{ui:SymbolIcon DeveloperBoard24}"
+                     Title="{Binding RelativeSource={RelativeSource AncestorType={x:Type ui:FluentWindow}}, Path=Title}" />
+
+        <Grid Grid.Row="1" Margin="10">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -152,6 +163,7 @@
                            TextTrimming="CharacterEllipsis"
                            ToolTip="{Binding ProfileDirectory}" />
             </StackPanel>
+        </Grid>
         </Grid>
     </Grid>
 </ui:FluentWindow>

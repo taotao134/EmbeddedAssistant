@@ -2,7 +2,6 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -29,15 +28,11 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
     private const string ControlInputPrefix = "__DEVICE_DEBUG_STUDIO_CONTROL__:";
     private const int MaximumOutputCharacters = 500_000;
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-    private static readonly Regex AnsiEscapeRegex = new(
-        "\\u001B(?:\\[[0-?]*[ -/]*[@-~]|\\][^\\u0007]*(?:\\u0007|\\u001B\\\\)|[()][0-2A-Z])",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly string RunnerScript =
         """
         $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
         [Console]::OutputEncoding = $OutputEncoding
         $ErrorActionPreference = 'Continue'
-        $env:TERM = 'xterm-256color'
         $commandDoneMarker = '__DEVICE_DEBUG_STUDIO_COMMAND_DONE__'
         $exitMarker = '__DEVICE_DEBUG_STUDIO_EXIT__'
         $controlInputPrefix = '__DEVICE_DEBUG_STUDIO_CONTROL__:'
@@ -210,9 +205,9 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
     private readonly StringBuilder _outputBuilder = new();
     private CancellationTokenSource? _readCancellation;
     private Task? _outputTask;
+    private Task? _errorTask;
     private TaskCompletionSource<bool>? _commandCompletion;
     private Process? _process;
-    private ConPtySession? _conPtySession;
     private int _starting;
     private int _disposed;
     private int _historyIndex;
@@ -383,15 +378,7 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
         try
         {
             await RunOnUiAsync(() => AppendOutputLine("TX", GetControlDisplayText(controlCode))).ConfigureAwait(false);
-            if (controlCode == 3 && IsBusy && GetConPtySession() is { } conPtySession)
-            {
-                // 忙碌时发送真实控制字符，让 ConPTY 把 Ctrl+C 传给当前前台程序。
-                await WriteInputBytesAsync(conPtySession, new byte[] { 0x03 }).ConfigureAwait(true);
-            }
-            else
-            {
-                await WriteInputLineAsync(process, $"{ControlInputPrefix}{controlCode}").ConfigureAwait(true);
-            }
+            await WriteInputLineAsync(process, $"{ControlInputPrefix}{controlCode}").ConfigureAwait(true);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException or ObjectDisposedException)
         {
@@ -399,18 +386,11 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private async Task WriteInputLineAsync(Process process, string line, ConPtySession? sessionOverride = null)
+    private async Task WriteInputLineAsync(Process process, string line)
     {
         await _inputWriteLock.WaitAsync().ConfigureAwait(true);
         try
         {
-            ConPtySession? session = sessionOverride ?? GetConPtySession();
-            if (session is not null)
-            {
-                await WriteInputBytesCoreAsync(session, Utf8NoBom.GetBytes(line + "\r")).ConfigureAwait(true);
-                return;
-            }
-
             await process.StandardInput.WriteLineAsync(line).ConfigureAwait(true);
             await process.StandardInput.FlushAsync().ConfigureAwait(true);
         }
@@ -418,28 +398,6 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
         {
             _inputWriteLock.Release();
         }
-    }
-
-    private async Task WriteInputBytesAsync(ConPtySession session, ReadOnlyMemory<byte> bytes)
-    {
-        // 所有输入都经过同一把锁，避免命令文本和 Ctrl+C 字节交叉写入伪终端。
-        await _inputWriteLock.WaitAsync().ConfigureAwait(true);
-        try
-        {
-            await WriteInputBytesCoreAsync(session, bytes).ConfigureAwait(true);
-        }
-        finally
-        {
-            _inputWriteLock.Release();
-        }
-    }
-
-    private static Task WriteInputBytesCoreAsync(ConPtySession session, ReadOnlyMemory<byte> bytes)
-    {
-        // ConPTY 使用同步匿名管道，直接同步写入可以避免非 overlapped 句柄上的异步写入失效。
-        session.Input.Write(bytes.Span);
-        session.Input.Flush();
-        return Task.CompletedTask;
     }
 
     private bool CanStop() => IsRunning;
@@ -467,27 +425,38 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
         {
             string executable = ResolvePowerShellExecutable();
             string directory = ResolveWorkingDirectory();
-            List<string> arguments =
-            [
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                RunnerScript
-            ];
-            ConPtySession conPtySession = ConPtySession.Start(executable, arguments, directory);
-            Process process = Process.GetProcessById(conPtySession.ProcessId);
+            ProcessStartInfo startInfo = new()
+            {
+                FileName = executable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = directory,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Utf8NoBom,
+                StandardErrorEncoding = Utf8NoBom
+            };
+            startInfo.ArgumentList.Add("-NoLogo");
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add(RunnerScript);
+
+            Process process = new() { StartInfo = startInfo, EnableRaisingEvents = true };
+            if (!process.Start())
+            {
+                process.Dispose();
+                throw new InvalidOperationException("无法启动 PowerShell。");
+            }
 
             CancellationTokenSource readCancellation = new();
-            Task outputTask = ReadOutputAsync(conPtySession, readCancellation.Token);
             lock (_processSync)
             {
                 _process = process;
-                _conPtySession = conPtySession;
                 _readCancellation = readCancellation;
-                _outputTask = outputTask;
             }
 
             IsRunning = true;
@@ -496,7 +465,9 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
             AppendOutputLine("INFO", "Windows PowerShell 已启动");
             AppendOutputLine("INFO", $"工作目录：{directory}");
             AppendPrompt();
-            _ = ObserveProcessAsync(process, conPtySession, readCancellation, outputTask);
+            _outputTask = ReadOutputAsync(process, readCancellation.Token);
+            _errorTask = ReadErrorAsync(process, readCancellation.Token);
+            _ = ObserveProcessAsync(process, readCancellation);
         }
         catch (Exception exception)
         {
@@ -515,19 +486,15 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
     private async Task StopProcessAsync()
     {
         Process? process;
-        ConPtySession? conPtySession;
         CancellationTokenSource? cancellation;
         TaskCompletionSource<bool>? completion;
         lock (_processSync)
         {
             process = _process;
-            conPtySession = _conPtySession;
             cancellation = _readCancellation;
             completion = _commandCompletion;
             _process = null;
-            _conPtySession = null;
             _readCancellation = null;
-            _outputTask = null;
             _commandCompletion = null;
         }
 
@@ -543,22 +510,9 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
-            if (conPtySession is not null)
+            if (!process.HasExited)
             {
-                if (!conPtySession.HasExited)
-                {
-                    // 停止按钮同样由 UI 线程触发，保持停止后的属性和命令状态更新在 UI 线程。
-                    await WriteInputLineAsync(process, ExitMarker, conPtySession).ConfigureAwait(true);
-                    await conPtySession.WaitForExitAsync().WaitAsync(TimeSpan.FromMilliseconds(800)).ConfigureAwait(true);
-                }
-
-                if (!conPtySession.HasExited)
-                {
-                    conPtySession.Kill();
-                }
-            }
-            else if (!process.HasExited)
-            {
+                // 停止按钮同样由 UI 线程触发，保持停止后的属性和命令状态更新在 UI 线程。
                 await WriteInputLineAsync(process, ExitMarker).ConfigureAwait(true);
                 await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMilliseconds(800)).ConfigureAwait(true);
             }
@@ -567,11 +521,7 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
         {
             try
             {
-                if (conPtySession is not null)
-                {
-                    conPtySession.Kill();
-                }
-                else if (!process.HasExited)
+                if (!process.HasExited)
                 {
                     process.Kill(entireProcessTree: true);
                 }
@@ -584,10 +534,6 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
         finally
         {
             process.Dispose();
-            if (conPtySession is not null)
-            {
-                await conPtySession.DisposeAsync().ConfigureAwait(true);
-            }
             cancellation?.Dispose();
             IsRunning = false;
             IsBusy = false;
@@ -597,44 +543,34 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private async Task ObserveProcessAsync(
-        Process process,
-        ConPtySession conPtySession,
-        CancellationTokenSource cancellation,
-        Task outputTask)
+    private async Task ObserveProcessAsync(Process process, CancellationTokenSource cancellation)
     {
-        bool isCurrent = false;
         try
         {
-            await outputTask.ConfigureAwait(false);
-            await conPtySession.WaitForExitAsync().ConfigureAwait(false);
+            await Task.WhenAll(_outputTask ?? Task.CompletedTask, _errorTask ?? Task.CompletedTask).ConfigureAwait(false);
+            await process.WaitForExitAsync().ConfigureAwait(false);
         }
-        catch (Exception exception) when (
-            exception is OperationCanceledException
-                or ObjectDisposedException
-                or IOException
-                or InvalidOperationException)
+        catch (Exception exception) when (exception is OperationCanceledException or ObjectDisposedException)
         {
         }
         finally
         {
-            lock (_processSync)
+            await RunOnUiAsync(() =>
             {
-                isCurrent = ReferenceEquals(_process, process);
-                if (isCurrent)
+                bool isCurrent;
+                lock (_processSync)
                 {
-                    _process = null;
-                    _conPtySession = null;
-                    _readCancellation = null;
-                    _outputTask = null;
-                    _commandCompletion?.TrySetCanceled();
-                    _commandCompletion = null;
+                    isCurrent = ReferenceEquals(_process, process);
+                    if (isCurrent)
+                    {
+                        _process = null;
+                        _readCancellation = null;
+                        _commandCompletion?.TrySetCanceled();
+                        _commandCompletion = null;
+                    }
                 }
-            }
 
-            if (isCurrent)
-            {
-                await RunOnUiAsync(() =>
+                if (isCurrent)
                 {
                     IsRunning = false;
                     IsBusy = false;
@@ -642,131 +578,47 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
                     AppendOutputLine("INFO", "PowerShell 会话已退出。");
                     StopCommand.NotifyCanExecuteChanged();
                     ExecuteCommandCommand.NotifyCanExecuteChanged();
-                }).ConfigureAwait(false);
-
-                process.Dispose();
-                await conPtySession.DisposeAsync().ConfigureAwait(false);
-                cancellation.Dispose();
-            }
+                }
+            }).ConfigureAwait(false);
         }
     }
 
-    private async Task ReadOutputAsync(ConPtySession session, CancellationToken cancellationToken)
+    private async Task ReadOutputAsync(Process process, CancellationToken cancellationToken)
     {
         try
         {
-            using StreamReader reader = new(session.Output, Utf8NoBom, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-            char[] readBuffer = new char[4096];
-            StringBuilder protocolBuffer = new();
-            while (true)
+            while (await process.StandardOutput.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
             {
-                int readCount = await reader.ReadAsync(readBuffer.AsMemory(), cancellationToken).ConfigureAwait(false);
-                if (readCount == 0)
+                if (string.Equals(line, CommandDoneMarker, StringComparison.Ordinal))
                 {
-                    break;
+                    lock (_processSync)
+                    {
+                        _commandCompletion?.TrySetResult(true);
+                    }
+                    await RunOnUiAsync(AppendPrompt).ConfigureAwait(false);
+                    continue;
                 }
 
-                protocolBuffer.Append(readBuffer, 0, readCount);
-                await FlushTerminalBufferAsync(protocolBuffer, flushAll: false).ConfigureAwait(false);
+                await RunOnUiAsync(() => AppendOutputLine("RX", line)).ConfigureAwait(false);
             }
-
-            await FlushTerminalBufferAsync(protocolBuffer, flushAll: true).ConfigureAwait(false);
         }
-        catch (Exception exception) when (
-            exception is OperationCanceledException
-                or ObjectDisposedException
-                or IOException
-                or InvalidOperationException)
+        catch (Exception exception) when (exception is OperationCanceledException or ObjectDisposedException)
         {
         }
     }
 
-    private async Task FlushTerminalBufferAsync(StringBuilder protocolBuffer, bool flushAll)
+    private async Task ReadErrorAsync(Process process, CancellationToken cancellationToken)
     {
-        while (protocolBuffer.Length > 0)
+        try
         {
-            string snapshot = protocolBuffer.ToString();
-            int markerIndex = snapshot.IndexOf(CommandDoneMarker, StringComparison.Ordinal);
-            if (markerIndex >= 0)
+            while (await process.StandardError.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
             {
-                await EmitTerminalTextAsync(snapshot[..markerIndex]).ConfigureAwait(false);
-                protocolBuffer.Remove(0, markerIndex + CommandDoneMarker.Length);
-                lock (_processSync)
-                {
-                    _commandCompletion?.TrySetResult(true);
-                }
-
-                await RunOnUiAsync(AppendPrompt).ConfigureAwait(false);
-                continue;
-            }
-
-            int keepLength = flushAll ? 0 : GetMarkerPrefixSuffixLength(snapshot);
-            int emitLength = snapshot.Length - keepLength;
-            if (emitLength <= 0)
-            {
-                return;
-            }
-
-            await EmitTerminalTextAsync(snapshot[..emitLength]).ConfigureAwait(false);
-            protocolBuffer.Remove(0, emitLength);
-            if (!flushAll)
-            {
-                return;
+                await RunOnUiAsync(() => AppendOutputLine("ERR", line)).ConfigureAwait(false);
             }
         }
-    }
-
-    private static int GetMarkerPrefixSuffixLength(string text)
-    {
-        int maximumLength = Math.Min(CommandDoneMarker.Length - 1, text.Length);
-        for (int length = maximumLength; length > 0; length--)
+        catch (Exception exception) when (exception is OperationCanceledException or ObjectDisposedException)
         {
-            if (text.AsSpan(text.Length - length, length)
-                .SequenceEqual(CommandDoneMarker.AsSpan(0, length)))
-            {
-                return length;
-            }
         }
-
-        return 0;
-    }
-
-    private async Task EmitTerminalTextAsync(string text)
-    {
-        string cleanedText = CleanTerminalText(text);
-        if (cleanedText.Length == 0)
-        {
-            return;
-        }
-
-        cleanedText = cleanedText.Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace('\r', '\n');
-        foreach (string line in cleanedText.Split('\n'))
-        {
-            if (line.Length == 0)
-            {
-                continue;
-            }
-
-            await RunOnUiAsync(() => AppendOutputLine("RX", line)).ConfigureAwait(false);
-        }
-    }
-
-    private static string CleanTerminalText(string text)
-    {
-        string withoutAnsi = AnsiEscapeRegex.Replace(text, string.Empty);
-        StringBuilder cleaned = new(withoutAnsi.Length);
-        foreach (char character in withoutAnsi)
-        {
-            if (character == '\b' || (char.IsControl(character) && character is not ('\r' or '\n' or '\t')))
-            {
-                continue;
-            }
-
-            cleaned.Append(character);
-        }
-
-        return cleaned.ToString();
     }
 
     private async Task RunOnUiAsync(Action action)
@@ -825,14 +677,6 @@ public partial class PowerShellViewModel : ObservableObject, IAsyncDisposable
         lock (_processSync)
         {
             return _process;
-        }
-    }
-
-    private ConPtySession? GetConPtySession()
-    {
-        lock (_processSync)
-        {
-            return _conPtySession;
         }
     }
 

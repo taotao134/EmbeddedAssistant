@@ -9,8 +9,19 @@
                  MinWidth="760"
                  MinHeight="480"
                  WindowStartupLocation="Manual"
-                 ResizeMode="CanResize">
+                 ResizeMode="CanResize"
+                 ExtendsContentIntoTitleBar="True">
     <Grid Background="{DynamicResource WorkspaceBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="44" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0"
+                     Icon="{ui:SymbolIcon DeveloperBoard24}"
+                     Title="{Binding RelativeSource={RelativeSource AncestorType={x:Type ui:FluentWindow}}, Path=Title}" />
+
+        <Grid Grid.Row="1">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="360" MinWidth="260" />
             <ColumnDefinition Width="5" />
@@ -522,7 +533,7 @@
                          Style="{StaticResource ConnectionTextBoxStyle}"
                          IsReadOnly="True"
                          FontFamily="Cascadia Mono, Consolas"
-                         Text="{Binding ResolvedPayload}" />
+                         Text="{Binding ResolvedPayload, Mode=OneWay}" />
                 <Button Grid.Column="2"
                         Width="34"
                         Height="28"
@@ -561,6 +572,7 @@
                            Foreground="{DynamicResource MutedTextBrush}"
                            Text="ms" />
             </Grid>
+        </Grid>
         </Grid>
     </Grid>
 </ui:FluentWindow>

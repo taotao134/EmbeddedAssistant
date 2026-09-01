@@ -1531,7 +1531,8 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
             || reason.StartsWith(PortOpenRetryWorkerErrorPrefix, StringComparison.Ordinal))
         {
             return $"打开串口 {settings.PortName}（{settings.BaudRate}）失败：端口被其他程序占用，或上一轮关闭尚未完成。"
-                + $"已自动重试 {AccessDeniedOpenRetryCount} 次；请关闭 SSCOM 等占用该端口的程序后重试。";
+                + $"已自动重试 {AccessDeniedOpenRetryCount} 次；请关闭 SSCOM 等占用该端口的程序后重试。"
+                + "本次打开已终止并释放，不限制波特率，可直接切换任意波特率重试。";
         }
 
         return $"打开串口 {settings.PortName}（{settings.BaudRate}）失败：{reason}。"
