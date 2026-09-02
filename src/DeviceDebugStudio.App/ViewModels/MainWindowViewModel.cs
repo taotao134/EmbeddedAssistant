@@ -69,6 +69,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly Dictionary<Guid, CancellationTokenSource> _parameterRepeatCommands = [];
     private readonly Dictionary<QuickCommandCategory, List<QuickCommandItemViewModel>> _quickCommandsByCategory = [];
     private readonly ConcurrentDictionary<Guid, string> _importedProfileSourcePaths = new();
+    private readonly ConcurrentDictionary<Guid, byte> _deletedProfileIds = new();
     private CancellationTokenSource? _sendRepeatCancellation;
     private readonly object _decoderSync = new();
     private readonly object _frameCodecSync = new();
@@ -291,10 +292,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<ModbusRegisterItem> ModbusRegisters { get; } = [];
     public TftpClientViewModel TftpClient { get; } = new();
     public PowerShellViewModel PowerShell { get; } = new();
+    public int SelectedProfileDeleteCount => SelectedProfile is null
+        ? 0
+        : GetSelectedProfileDeleteTargets(SelectedProfile).Length;
 
     public event Action<int>? RecordsAppended;
     public event Action<double>? ChartValueAdded;
-    public event Action<QuickCommandItemViewModel>? QuickCommandAdded;
     public event Action<UpdateCheckResult>? UpdateAvailable;
 
     [ObservableProperty]
@@ -1660,6 +1663,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private void AddQuickCommand()
     {
+        QuickCommandSearchText = string.Empty;
         QuickCommandItemViewModel command = new(new QuickCommand
         {
             Name = "新命令",
@@ -1668,7 +1672,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         });
         QuickCommands.Add(command);
         SelectedQuickCommand = command;
-        QuickCommandAdded?.Invoke(command);
         ScheduleProfileSave();
     }
 
@@ -1732,7 +1735,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ScheduleProfileSave();
     }
 
-    private bool CanDeleteSelectedQuickCommands() => QuickCommands.Any(command => command.IsSelectedForBulkDelete);
+    private bool CanDeleteSelectedQuickCommands() =>
+        QuickCommands.Any(command => command.IsSelectedForBulkDelete)
+        || SelectedQuickCommand is not null && QuickCommands.Contains(SelectedQuickCommand);
+
+    public void NotifyQuickCommandBulkDeleteSelectionChanged() =>
+        DeleteSelectedQuickCommandsCommand.NotifyCanExecuteChanged();
 
     [RelayCommand(CanExecute = nameof(CanDeleteSelectedQuickCommands))]
     private void DeleteSelectedQuickCommands()
@@ -1740,6 +1748,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         QuickCommandItemViewModel[] selected = QuickCommands
             .Where(command => command.IsSelectedForBulkDelete)
             .ToArray();
+        if (selected.Length == 0 && SelectedQuickCommand is { } selectedCommand && QuickCommands.Contains(selectedCommand))
+        {
+            selected = [selectedCommand];
+        }
+
         foreach (QuickCommandItemViewModel command in selected)
         {
             StopQuickCommandRepeat(command);
@@ -1969,15 +1982,59 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public async Task DeleteSelectedProfileAsync()
     {
-        if (SelectedProfile is null)
+        DeviceProfile? selectedProfile = SelectedProfile;
+        if (selectedProfile is null)
         {
             return;
         }
-        Guid profileId = SelectedProfile.Id;
-        await _profileStore.DeleteAsync(profileId).ConfigureAwait(true);
-        _importedProfileSourcePaths.TryRemove(profileId, out _);
-        await SaveAppSettingsAsync().ConfigureAwait(true);
-        await ReloadProfilesAsync().ConfigureAwait(true);
+
+        DeviceProfile[] profilesToDelete = GetSelectedProfileDeleteTargets(selectedProfile);
+        HashSet<Guid> profileIds = profilesToDelete.Select(profile => profile.Id).ToHashSet();
+        _profileSaveTimer.Stop();
+        _appSettingsSaveTimer.Stop();
+        foreach (Guid profileId in profileIds)
+        {
+            _deletedProfileIds.TryAdd(profileId, 0);
+        }
+
+        Interlocked.Increment(ref _profileSaveRevision);
+        Task pendingSave = _lastProfileSaveTask;
+        try
+        {
+            await pendingSave.ConfigureAwait(true);
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(exception, "删除设备配置前等待自动保存失败，继续执行删除");
+        }
+
+        try
+        {
+            foreach (Guid profileId in profileIds)
+            {
+                await _profileStore.DeleteAsync(profileId).ConfigureAwait(true);
+                _importedProfileSourcePaths.TryRemove(profileId, out _);
+            }
+
+            if (_activeProfile is not null && profileIds.Contains(_activeProfile.Id))
+            {
+                _activeProfile = null;
+            }
+
+            await ReloadProfilesAsync().ConfigureAwait(true);
+            await SaveAppSettingsAsync().ConfigureAwait(true);
+            StatusText = profilesToDelete.Length > 1
+                ? $"已删除 {profilesToDelete.Length} 个同名设备配置：{selectedProfile.Name}"
+                : $"已删除设备配置：{selectedProfile.Name}";
+        }
+        catch
+        {
+            foreach (Guid profileId in profileIds)
+            {
+                _deletedProfileIds.TryRemove(profileId, out _);
+            }
+            throw;
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -2068,6 +2125,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private Task QueueProfileSave(DeviceProfile snapshot)
     {
+        if (_deletedProfileIds.ContainsKey(snapshot.Id))
+        {
+            return Task.CompletedTask;
+        }
+
         long revision = Interlocked.Increment(ref _profileSaveRevision);
         Task previousSave = _lastProfileSaveTask;
         Task saveTask = Task.Run(() => QueueProfileSaveAsync(previousSave, snapshot, revision));
@@ -2086,7 +2148,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             // 上一次保存失败不应阻塞后续配置写入。
         }
 
-        if (revision != Volatile.Read(ref _profileSaveRevision))
+        if (revision != Volatile.Read(ref _profileSaveRevision)
+            || _deletedProfileIds.ContainsKey(snapshot.Id))
         {
             return;
         }
@@ -2750,6 +2813,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     partial void OnSelectedQuickCommandChanged(QuickCommandItemViewModel? value)
     {
         AddQuickCommandVariableSetCommand.NotifyCanExecuteChanged();
+        DeleteSelectedQuickCommandsCommand.NotifyCanExecuteChanged();
         RefreshSendCommandAvailability();
     }
 
@@ -2822,7 +2886,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private void RefreshSendCommandAvailability()
     {
-        Dispatcher dispatcher = Application.Current.Dispatcher;
+        Application? application = Application.Current;
+        if (application is null)
+        {
+            return;
+        }
+
+        Dispatcher dispatcher = application.Dispatcher;
         if (!dispatcher.CheckAccess())
         {
             if (!dispatcher.HasShutdownStarted && !dispatcher.HasShutdownFinished)
@@ -4111,7 +4181,28 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             LoadProfile(SelectedProfile);
         }
+        else
+        {
+            _activeProfile = null;
+        }
     }
+
+    private DeviceProfile[] GetSelectedProfileDeleteTargets(DeviceProfile selectedProfile)
+    {
+        string selectedName = NormalizeProfileName(selectedProfile.Name);
+        DeviceProfile[] matches = Profiles
+            .Where(profile => profile.Id == selectedProfile.Id
+                || string.Equals(
+                    NormalizeProfileName(profile.Name),
+                    selectedName,
+                    StringComparison.OrdinalIgnoreCase))
+            .DistinctBy(profile => profile.Id)
+            .ToArray();
+        return matches.Length == 0 ? [selectedProfile] : matches;
+    }
+
+    private static string NormalizeProfileName(string? name) =>
+        string.IsNullOrWhiteSpace(name) ? "未命名设备" : name.Trim();
 
     private void LoadProfile(DeviceProfile profile)
     {

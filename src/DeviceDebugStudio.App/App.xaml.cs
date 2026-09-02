@@ -310,6 +310,12 @@ public partial class App : Application
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#3E5C83" : "#9FB4CE"));
         Current.Resources["QuickCommandEditorSectionBrush"] = new System.Windows.Media.SolidColorBrush(
             (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#162033" : "#FFFFFF"));
+        Current.Resources["QuickCommandVariableGridLineBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#3A5576" : "#B7C9DD"));
+        Current.Resources["QuickCommandVariableRowBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#192A40" : "#F0F6FD"));
+        Current.Resources["QuickCommandVariableAlternateRowBrush"] = new System.Windows.Media.SolidColorBrush(
+            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#223B5C" : "#DCEAF8"));
 
         foreach (Window window in Current.Windows.OfType<Window>())
         {

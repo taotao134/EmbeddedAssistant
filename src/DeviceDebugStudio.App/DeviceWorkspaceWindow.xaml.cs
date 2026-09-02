@@ -38,9 +38,13 @@ public partial class DeviceWorkspaceWindow : FluentWindow
             return;
         }
 
+        int deleteCount = _viewModel.SelectedProfileDeleteCount;
+        string message = deleteCount > 1
+            ? $"检测到 {deleteCount} 个同名设备配置“{_viewModel.SelectedProfile.Name}”，将全部删除。原 SSCOM 文件不会受影响。"
+            : $"删除设备配置“{_viewModel.SelectedProfile.Name}”？原 SSCOM 文件不会受影响。";
         MessageBoxResult result = MessageBox.Show(
             this,
-            $"删除设备配置“{_viewModel.SelectedProfile.Name}”？原 SSCOM 文件不会受影响。",
+            message,
             "删除设备配置",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);

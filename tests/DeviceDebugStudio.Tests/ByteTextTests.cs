@@ -84,6 +84,58 @@ public sealed class ByteTextTests
     }
 
     [Fact]
+    public void TryCreateParameterTemplateRecognizesDelimitedValues()
+    {
+        bool created = ByteText.TryCreateParameterTemplate(
+            "$TEST2595,9.690000,30",
+            out string template,
+            out IReadOnlyList<string> values);
+
+        Assert.True(created);
+        Assert.Equal("$TEST2595,${param1},${param2}", template);
+        Assert.Equal(["9.690000", "30"], values);
+    }
+
+    [Fact]
+    public void TryCreateParameterTemplateRecognizesEmptyAssignmentParameters()
+    {
+        bool created = ByteText.TryCreateParameterTemplate(
+            "kas+pid=,,,",
+            out string template,
+            out IReadOnlyList<string> values);
+
+        Assert.True(created);
+        Assert.Equal("kas+pid=${param1},${param2},${param3}", template);
+        Assert.Equal([string.Empty, string.Empty, string.Empty], values);
+    }
+
+    [Fact]
+    public void TryCreateParameterTemplatePreservesEmptyAndTrailingFields()
+    {
+        bool created = ByteText.TryCreateParameterTemplate(
+            "cmd,first,,third,",
+            out string template,
+            out IReadOnlyList<string> values);
+
+        Assert.True(created);
+        Assert.Equal("cmd,${param1},${param2},${param3},${param4}", template);
+        Assert.Equal(["first", string.Empty, "third", string.Empty], values);
+    }
+
+    [Fact]
+    public void TryCreateParameterTemplateRejectsCommandWithoutParameters()
+    {
+        bool created = ByteText.TryCreateParameterTemplate(
+            "AT+BAUD=115200",
+            out string template,
+            out IReadOnlyList<string> values);
+
+        Assert.False(created);
+        Assert.Equal("AT+BAUD=115200", template);
+        Assert.Empty(values);
+    }
+
+    [Fact]
     public void ToEscapedHex_PrefixesEveryByteWithoutAmbiguity()
     {
         Assert.Equal(@"\x12\x33", ByteText.ToEscapedHex([0x12, 0x33]));

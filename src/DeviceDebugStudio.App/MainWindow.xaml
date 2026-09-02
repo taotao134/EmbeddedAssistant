@@ -195,7 +195,7 @@
                             Height="16"
                             Margin="8,0,6,0"
                             Background="{DynamicResource DividerBrush}" />
-                    <Button Style="{StaticResource IconButtonStyle}" ToolTip="打开设备工作区窗口" Click="OnToggleDevicePanelClick">
+                    <Button Style="{StaticResource IconButtonStyle}" ToolTip="显示或隐藏设备面板" Click="OnToggleDevicePanelClick">
                         <ui:SymbolIcon Symbol="PanelLeft20" Width="15" Height="15" FontSize="15" />
                     </Button>
                     <Button Style="{StaticResource IconButtonStyle}" ToolTip="切换主题" Click="OnToggleThemeClick">
@@ -1945,13 +1945,13 @@
                                    Margin="0,0,6,3"
                                    Text="快捷指令" />
                         <Button Style="{StaticResource IconButtonStyle}"
-                                ToolTip="删除勾选的快捷指令"
+                                ToolTip="删除选中指令；勾选多项可批量删除"
                                 Command="{Binding DeleteSelectedQuickCommandsCommand}">
                             <ui:SymbolIcon Symbol="Delete20" />
                         </Button>
                         <Button Style="{StaticResource IconButtonStyle}"
                                 ToolTip="新增命令"
-                                Command="{Binding AddQuickCommandCommand}">
+                                Click="OnAddQuickCommandClick">
                             <ui:SymbolIcon Symbol="Add20" />
                         </Button>
                         <Button Height="24"
@@ -2117,6 +2117,10 @@
                                                     <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource ButtonSurfaceBrush}" />
                                                     <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
                                                 </Trigger>
+                                                <DataTrigger Binding="{Binding IsPinned}" Value="True">
+                                                    <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource NavigationSelectedBrush}" />
+                                                    <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                                </DataTrigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </Setter.Value>
@@ -2153,7 +2157,9 @@
                                                       HorizontalAlignment="Center"
                                                       VerticalAlignment="Center"
                                                       FocusVisualStyle="{x:Null}"
-                                                      IsChecked="{Binding IsSelectedForBulkDelete}"
+                                                      IsChecked="{Binding IsSelectedForBulkDelete, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                      Checked="OnQuickCommandBulkDeleteSelectionChanged"
+                                                      Unchecked="OnQuickCommandBulkDeleteSelectionChanged"
                                                       ToolTip="勾选后可批量删除" />
                                             <TextBox Grid.Column="1"
                                                      x:Name="QuickCommandNameTextBox"
@@ -2208,7 +2214,9 @@
                                                      VerticalContentAlignment="Center"
                                                      Text="{Binding Payload, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                       PreviewMouseLeftButtonDown="OnQuickCommandPayloadPreviewMouseLeftButtonDown"
-                                                      ToolTip="{Binding Payload}" />
+                                                     LostKeyboardFocus="OnQuickCommandPayloadLostKeyboardFocus"
+                                                      PreviewKeyDown="OnQuickCommandPayloadPreviewKeyDown"
+                                                      ToolTip="输入带逗号参数后按回车或离开输入框会自动生成模板；当前发送内容：{Binding Payload}" />
                                             <Button Grid.Column="4"
                                                      Style="{StaticResource QuickCommandActionButtonStyle}"
                                                      ToolTip="发送"
@@ -2667,55 +2675,97 @@
                                                     <ColumnDefinition Width="1.5*" />
                                                     <ColumnDefinition Width="28" />
                                                 </Grid.ColumnDefinitions>
-                                                <TextBlock Margin="6,0" VerticalAlignment="Center" FontSize="11" TextAlignment="Center" Text="变量" />
-                                                <TextBlock Grid.Column="1" Margin="6,0" VerticalAlignment="Center" FontSize="11" TextAlignment="Center" Text="值" />
-                                                <TextBlock Grid.Column="3" Margin="6,0" VerticalAlignment="Center" FontSize="11" TextAlignment="Center" Text="变量" />
-                                                <TextBlock Grid.Column="4" Margin="6,0" VerticalAlignment="Center" FontSize="11" TextAlignment="Center" Text="值" />
+                                                <Border BorderBrush="{DynamicResource QuickCommandVariableGridLineBrush}"
+                                                        BorderThickness="1,1,1,1">
+                                                    <TextBlock Margin="6,0" VerticalAlignment="Center" FontSize="11" TextAlignment="Center" Text="变量" />
+                                                </Border>
+                                                <Border Grid.Column="1"
+                                                        BorderBrush="{DynamicResource QuickCommandVariableGridLineBrush}"
+                                                        BorderThickness="0,1,1,1">
+                                                    <TextBlock Margin="6,0" VerticalAlignment="Center" FontSize="11" TextAlignment="Center" Text="值" />
+                                                </Border>
+                                                <Border Grid.Column="2"
+                                                        BorderBrush="{DynamicResource QuickCommandVariableGridLineBrush}"
+                                                        BorderThickness="0,1,1,1" />
+                                                <Border Grid.Column="3"
+                                                        BorderBrush="{DynamicResource QuickCommandVariableGridLineBrush}"
+                                                        BorderThickness="0,1,1,1">
+                                                    <TextBlock Margin="6,0" VerticalAlignment="Center" FontSize="11" TextAlignment="Center" Text="变量" />
+                                                </Border>
+                                                <Border Grid.Column="4"
+                                                        BorderBrush="{DynamicResource QuickCommandVariableGridLineBrush}"
+                                                        BorderThickness="0,1,1,1">
+                                                    <TextBlock Margin="6,0" VerticalAlignment="Center" FontSize="11" TextAlignment="Center" Text="值" />
+                                                </Border>
+                                                <Border Grid.Column="5"
+                                                        BorderBrush="{DynamicResource QuickCommandVariableGridLineBrush}"
+                                                        BorderThickness="0,1,1,1" />
                                             </Grid>
                                             <ListBox Grid.Row="1"
-                                                     MaxHeight="116"
-                                                     ItemsSource="{Binding SelectedVariableSet.Variables}"
-                                                     BorderThickness="0"
-                                                     Background="{DynamicResource ButtonSurfaceBrush}"
-                                                     AlternationCount="2"
-                                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                                      MaxHeight="116"
+                                                      ItemsSource="{Binding SelectedVariableSet.Variables}"
+                                                      BorderThickness="0"
+                                                      Background="{DynamicResource QuickCommandVariableRowBrush}"
+                                                      AlternationCount="4"
+                                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                      ScrollViewer.VerticalScrollBarVisibility="Auto">
                                                 <ListBox.ItemsPanel>
                                                     <ItemsPanelTemplate>
                                                         <UniformGrid Columns="2" />
                                                     </ItemsPanelTemplate>
                                                 </ListBox.ItemsPanel>
                                                 <ListBox.ItemContainerStyle>
-                                                    <Style TargetType="ListBoxItem">
-                                                        <Setter Property="Padding" Value="0" />
-                                                        <Setter Property="Margin" Value="0" />
-                                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-                                                    </Style>
-                                                </ListBox.ItemContainerStyle>
-                                                <ListBox.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <Grid Height="30" Margin="1">
-                                                            <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="*" />
-                                                                <ColumnDefinition Width="1.35*" />
-                                                                <ColumnDefinition Width="28" />
-                                                            </Grid.ColumnDefinitions>
-                                                            <TextBox Height="26"
-                                                                     Margin="2"
-                                                                     Style="{StaticResource ConnectionTextBoxStyle}"
-                                                                     FontFamily="Cascadia Mono, Consolas"
-                                                                     Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
-                                                                     PreviewMouseLeftButtonDown="OnQuickVariablePreviewMouseLeftButtonDown" />
-                                                            <TextBox Grid.Column="1"
-                                                                     Height="26"
-                                                                     Margin="2"
-                                                                     Style="{StaticResource ConnectionTextBoxStyle}"
-                                                                     FontFamily="Cascadia Mono, Consolas"
-                                                                     Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
-                                                                     PreviewMouseLeftButtonDown="OnQuickVariablePreviewMouseLeftButtonDown" />
-                                                            <Button Grid.Column="2"
-                                                                    Style="{StaticResource CompactIconButtonStyle}"
+                                                     <Style TargetType="ListBoxItem">
+                                                         <Setter Property="Padding" Value="0" />
+                                                         <Setter Property="Margin" Value="0" />
+                                                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                                         <Setter Property="Background" Value="{DynamicResource QuickCommandVariableRowBrush}" />
+                                                         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                                         <Style.Triggers>
+                                                             <Trigger Property="ItemsControl.AlternationIndex" Value="2">
+                                                                 <Setter Property="Background" Value="{DynamicResource QuickCommandVariableAlternateRowBrush}" />
+                                                             </Trigger>
+                                                             <Trigger Property="ItemsControl.AlternationIndex" Value="3">
+                                                                 <Setter Property="Background" Value="{DynamicResource QuickCommandVariableAlternateRowBrush}" />
+                                                             </Trigger>
+                                                             <Trigger Property="IsMouseOver" Value="True">
+                                                                 <Setter Property="Background" Value="{DynamicResource NavigationSelectedBrush}" />
+                                                             </Trigger>
+                                                         </Style.Triggers>
+                                                     </Style>
+                                                 </ListBox.ItemContainerStyle>
+                                                 <ListBox.ItemTemplate>
+                                                     <DataTemplate>
+                                                         <Border Background="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=Background}"
+                                                                 BorderBrush="{DynamicResource QuickCommandVariableGridLineBrush}"
+                                                                 BorderThickness="0,0,1,1">
+                                                         <Grid Height="30" Margin="0">
+                                                             <Grid.ColumnDefinitions>
+                                                                 <ColumnDefinition Width="*" />
+                                                                 <ColumnDefinition Width="1.35*" />
+                                                                 <ColumnDefinition Width="28" />
+                                                             </Grid.ColumnDefinitions>
+                                                             <Border BorderBrush="{DynamicResource QuickCommandVariableGridLineBrush}"
+                                                                     BorderThickness="0,0,1,0">
+                                                                 <TextBox Height="26"
+                                                                          Margin="2"
+                                                                          Style="{StaticResource ConnectionTextBoxStyle}"
+                                                                          FontFamily="Cascadia Mono, Consolas"
+                                                                          Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                                          PreviewMouseLeftButtonDown="OnQuickVariablePreviewMouseLeftButtonDown" />
+                                                             </Border>
+                                                             <Border Grid.Column="1"
+                                                                     BorderBrush="{DynamicResource QuickCommandVariableGridLineBrush}"
+                                                                     BorderThickness="0,0,1,0">
+                                                                 <TextBox Height="26"
+                                                                          Margin="2"
+                                                                          Style="{StaticResource ConnectionTextBoxStyle}"
+                                                                          FontFamily="Cascadia Mono, Consolas"
+                                                                          Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                                                                          PreviewMouseLeftButtonDown="OnQuickVariablePreviewMouseLeftButtonDown" />
+                                                             </Border>
+                                                             <Button Grid.Column="2"
+                                                                     Style="{StaticResource CompactIconButtonStyle}"
                                                                     Width="24"
                                                                     MinWidth="0"
                                                                     Height="26"
@@ -2724,11 +2774,12 @@
                                                                     ToolTip="删除本行变量"
                                                                     Command="{Binding DataContext.DeleteQuickCommandVariableCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                     CommandParameter="{Binding}">
-                                                                <ui:SymbolIcon Symbol="Delete20" Width="13" Height="13" />
-                                                            </Button>
-                                                        </Grid>
-                                                    </DataTemplate>
-                                                </ListBox.ItemTemplate>
+                                                                 <ui:SymbolIcon Symbol="Delete20" Width="13" Height="13" />
+                                                             </Button>
+                                                         </Grid>
+                                                         </Border>
+                                                     </DataTemplate>
+                                                 </ListBox.ItemTemplate>
                                             </ListBox>
                                             <TextBlock Grid.Row="1"
                                                        Height="38"

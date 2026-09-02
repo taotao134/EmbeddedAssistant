@@ -12,6 +12,9 @@ namespace DeviceDebugStudio.App.ViewModels;
 
 public partial class QuickCommandItemViewModel : ObservableObject
 {
+    private bool _automaticTemplateGenerationAllowed;
+    private bool _applyingAutomaticTemplate;
+
     public QuickCommandItemViewModel(QuickCommand command)
     {
         Id = command.Id;
@@ -28,6 +31,8 @@ public partial class QuickCommandItemViewModel : ObservableObject
         }
         payload = initialPayload;
         template = initialTemplate;
+        _automaticTemplateGenerationAllowed = string.IsNullOrEmpty(command.Template)
+            || string.Equals(initialPayload, initialTemplate, StringComparison.Ordinal);
         isHex = command.IsHex;
         lineEnding = command.LineEnding;
         checksum = command.Checksum;
@@ -151,6 +156,44 @@ public partial class QuickCommandItemViewModel : ObservableObject
     public bool HasTemplateVariables => GetTemplateVariableNames().Count > 0;
     public bool IsDirectPayloadMode => !HasTemplateVariables;
     public bool HasSelectedVariables => SelectedVariableSet?.Variables.Count > 0;
+
+    public bool TryAutoGenerateTemplateFromPayload()
+    {
+        if (IsHex
+            || !_automaticTemplateGenerationAllowed
+            || !ByteText.TryCreateParameterTemplate(Payload, out string generatedTemplate, out IReadOnlyList<string> parameterValues))
+        {
+            return false;
+        }
+
+        _applyingAutomaticTemplate = true;
+        try
+        {
+            Template = generatedTemplate;
+        }
+        finally
+        {
+            _applyingAutomaticTemplate = false;
+        }
+
+        IReadOnlyList<string> variableNames = ByteText.GetVariableNames(generatedTemplate);
+        QuickCommandVariableSetItemViewModel? targetSet = SelectedVariableSet;
+        if (targetSet is not null)
+        {
+            for (int index = 0; index < variableNames.Count && index < parameterValues.Count; index++)
+            {
+                QuickCommandVariableItemViewModel? variable = targetSet.Variables
+                    .FirstOrDefault(item => string.Equals(item.Name, variableNames[index], StringComparison.OrdinalIgnoreCase));
+                if (variable is not null && string.IsNullOrEmpty(variable.Value))
+                {
+                    variable.Value = parameterValues[index];
+                }
+            }
+        }
+
+        NotifyVariablePresentationChanged();
+        return true;
+    }
 
     public void RegisterUse()
     {
@@ -293,6 +336,11 @@ public partial class QuickCommandItemViewModel : ObservableObject
             template = normalized;
             value = normalized;
             OnPropertyChanged(nameof(Template));
+        }
+
+        if (!_applyingAutomaticTemplate)
+        {
+            _automaticTemplateGenerationAllowed = false;
         }
 
         SynchronizeTemplateVariables();

@@ -171,6 +171,78 @@ public static partial class ByteText
         return result.ToString();
     }
 
+    public static bool TryCreateParameterTemplate(
+        string input,
+        out string template,
+        out IReadOnlyList<string> parameterValues)
+    {
+        template = input;
+        parameterValues = [];
+        if (string.IsNullOrWhiteSpace(input)
+            || input.IndexOf(',') < 0
+            || input.IndexOf('\r') >= 0
+            || input.IndexOf('\n') >= 0
+            || GetVariableNames(input).Count > 0)
+        {
+            return false;
+        }
+
+        string normalized = NormalizeSscomCommandText(input);
+        int firstComma = normalized.IndexOf(',');
+        if (firstComma <= 0)
+        {
+            return false;
+        }
+
+        int equalsIndex = normalized.IndexOf('=');
+        bool assignmentStyle = equalsIndex >= 0 && equalsIndex < firstComma;
+        string prefix;
+        string[] values;
+        bool prependDelimiter;
+        if (assignmentStyle)
+        {
+            prefix = normalized[..(equalsIndex + 1)];
+            values = normalized[(equalsIndex + 1)..].Split(',', StringSplitOptions.None);
+            // 兼容 kas+pid=,,, 这类写法：连续逗号表示三个可编辑的空参数位置。
+            if (values.Length > 1 && values.All(string.IsNullOrEmpty))
+            {
+                values = values[..^1];
+            }
+            prependDelimiter = false;
+        }
+        else
+        {
+            string[] fields = normalized.Split(',', StringSplitOptions.None);
+            prefix = fields[0];
+            values = fields[1..];
+            prependDelimiter = true;
+        }
+
+        if (string.IsNullOrWhiteSpace(prefix) || values.Length == 0)
+        {
+            return false;
+        }
+
+        StringBuilder generated = new(normalized.Length + values.Length * 8);
+        generated.Append(prefix);
+        if (prependDelimiter)
+        {
+            generated.Append(',');
+        }
+        for (int index = 0; index < values.Length; index++)
+        {
+            if (index > 0)
+            {
+                generated.Append(',');
+            }
+            generated.Append("${param").Append(index + 1).Append('}');
+        }
+
+        template = generated.ToString();
+        parameterValues = values;
+        return true;
+    }
+
     public static string ExpandVariables(string input, IReadOnlyDictionary<string, string> variables) =>
         VariableRegex().Replace(input, match => variables.TryGetValue(match.Groups[1].Value, out string? value) ? value : match.Value);
 

@@ -68,7 +68,7 @@ public partial class MainWindow : FluentWindow
     private bool _closing;
     private bool _closeApproved;
     private bool _deviceDesiredOpen;
-    private bool _commandDesiredOpen;
+    private bool _commandDesiredOpen = false;
     private SidebarFocus _sidebarFocus;
     private GridLength _devicePanelExpandedWidth = new(232);
     private GridLength _commandPanelExpandedWidth = new(500);
@@ -94,7 +94,6 @@ public partial class MainWindow : FluentWindow
     private bool _themeTransitionActive;
     private bool _isCompactLayout;
     private bool _isMinimumLayout;
-    private DeviceWorkspaceWindow? _deviceWorkspaceWindow;
     private QuickCommandWindow? _quickCommandWindow;
 
     private double CurrentCommandPanelMinWidth =>
@@ -205,7 +204,6 @@ public partial class MainWindow : FluentWindow
         _viewModel.TerminalRecords.CollectionChanged += OnTerminalRecordsCollectionChanged;
         _viewModel.FrameRecords.CollectionChanged += OnFrameRecordsCollectionChanged;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
-        _viewModel.QuickCommandAdded += OnQuickCommandAdded;
         _viewModel.UpdateAvailable += OnUpdateAvailable;
         UpdateTerminalColumnWidths();
         UpdateFrameColumnWidths();
@@ -388,7 +386,6 @@ public partial class MainWindow : FluentWindow
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         _quickCommandScrollTimer.Stop();
         _quickCommandScrollTimer.Tick -= OnQuickCommandScrollTimerTick;
-        _viewModel.QuickCommandAdded -= OnQuickCommandAdded;
         _viewModel.UpdateAvailable -= OnUpdateAvailable;
         _viewModel.FrameRecords.CollectionChanged -= OnFrameRecordsCollectionChanged;
         base.OnClosed(e);
@@ -1318,11 +1315,31 @@ public partial class MainWindow : FluentWindow
         e.Handled = true;
     }
 
-    private void OnQuickCommandAdded(QuickCommandItemViewModel command)
+    private void OnAddQuickCommandClick(object sender, RoutedEventArgs e)
+    {
+        _viewModel.AddQuickCommandCommand.Execute(null);
+        if (_viewModel.SelectedQuickCommand is { } command)
+        {
+            FocusAddedQuickCommand(command);
+        }
+    }
+
+    private void OnQuickCommandBulkDeleteSelectionChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is CheckBox { DataContext: QuickCommandItemViewModel command } checkBox)
+        {
+            command.IsSelectedForBulkDelete = checkBox.IsChecked == true;
+        }
+
+        _viewModel.NotifyQuickCommandBulkDeleteSelectionChanged();
+    }
+
+    private void FocusAddedQuickCommand(QuickCommandItemViewModel command)
     {
         _ = Dispatcher.InvokeAsync(() =>
         {
             SelectQuickCommand(command);
+            QuickCommandsList.UpdateLayout();
             if (QuickCommandsList.ItemContainerGenerator.ContainerFromItem(command) is not ListBoxItem container)
             {
                 return;
@@ -1698,6 +1715,26 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    private void OnQuickCommandPayloadLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: QuickCommandItemViewModel command })
+        {
+            command.TryAutoGenerateTemplateFromPayload();
+        }
+    }
+
+    private void OnQuickCommandPayloadPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter
+            || sender is not TextBox { DataContext: QuickCommandItemViewModel command })
+        {
+            return;
+        }
+
+        command.TryAutoGenerateTemplateFromPayload();
+        e.Handled = true;
+    }
+
     private void OnQuickRepeatIntervalPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
         MoveIntervalCaretToEnd(sender);
 
@@ -1901,7 +1938,9 @@ public partial class MainWindow : FluentWindow
 
         QuickCommandItemViewModel? source = e.Data.GetData(typeof(QuickCommandItemViewModel)) as QuickCommandItemViewModel;
         int? insertionIndex = GetQuickCommandInsertionIndex(e);
-        if (source is null || insertionIndex is null)
+        if (source is null
+            || insertionIndex is null
+            || IsUnpinnedDropIntoPinnedRegion(source, insertionIndex.Value, e))
         {
             ClearQuickCommandDropIndicators();
             e.Effects = DragDropEffects.None;
@@ -1933,7 +1972,9 @@ public partial class MainWindow : FluentWindow
     {
         QuickCommandItemViewModel? source = e.Data.GetData(typeof(QuickCommandItemViewModel)) as QuickCommandItemViewModel;
         int? insertionIndex = GetQuickCommandInsertionIndex(e);
-        if (source is null || insertionIndex is null)
+        if (source is null
+            || insertionIndex is null
+            || IsUnpinnedDropIntoPinnedRegion(source, insertionIndex.Value, e))
         {
             ClearQuickCommandDropIndicators();
             e.Effects = DragDropEffects.None;
@@ -2049,6 +2090,29 @@ public partial class MainWindow : FluentWindow
         }
 
         return _quickCommandDropInsertionIndex ?? orderedCommands.Count;
+    }
+
+    private bool IsUnpinnedDropIntoPinnedRegion(
+        QuickCommandItemViewModel source,
+        int insertionIndex,
+        DragEventArgs e)
+    {
+        if (source.IsPinned)
+        {
+            return false;
+        }
+
+        List<QuickCommandItemViewModel> orderedCommands = GetQuickCommandViewItems();
+        int pinnedCount = orderedCommands.Count(command => command.IsPinned);
+        if (insertionIndex < pinnedCount)
+        {
+            return true;
+        }
+
+        ListBoxItem? targetItem = ItemsControl.ContainerFromElement(
+            QuickCommandsList,
+            e.OriginalSource as DependencyObject) as ListBoxItem;
+        return targetItem?.DataContext is QuickCommandItemViewModel { IsPinned: true };
     }
 
     private void ShowQuickCommandDropIndicator(int insertionIndex, bool useViewOrder)
@@ -2443,8 +2507,12 @@ public partial class MainWindow : FluentWindow
         {
             return;
         }
+        int deleteCount = _viewModel.SelectedProfileDeleteCount;
+        string message = deleteCount > 1
+            ? $"检测到 {deleteCount} 个同名设备配置“{_viewModel.SelectedProfile.Name}”，将全部删除。原 SSCOM 文件不会受影响。"
+            : $"删除设备配置“{_viewModel.SelectedProfile.Name}”？原 SSCOM 文件不会受影响。";
         MessageBoxResult result = MessageBox.Show(
-            $"删除设备配置“{_viewModel.SelectedProfile.Name}”？原 SSCOM 文件不会受影响。",
+            message,
             "删除设备配置",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
@@ -2814,17 +2882,39 @@ public partial class MainWindow : FluentWindow
 
     private void OnToggleDevicePanelClick(object sender, RoutedEventArgs e)
     {
-        ShowDeviceWorkspaceWindow();
+        if (_sidebarFocus == SidebarFocus.Device)
+        {
+            _sidebarFocus = SidebarFocus.None;
+            _deviceDesiredOpen = false;
+        }
+        else if (_sidebarFocus == SidebarFocus.Command)
+        {
+            _sidebarFocus = SidebarFocus.Device;
+            _deviceDesiredOpen = true;
+        }
+        else if (ShouldFocusDevicePanel())
+        {
+            _sidebarFocus = SidebarFocus.Device;
+            _deviceDesiredOpen = true;
+        }
+        else
+        {
+            bool opening = !_deviceDesiredOpen;
+            _deviceDesiredOpen = opening;
+            if (opening && ShouldFocusDevicePanel())
+            {
+                _sidebarFocus = SidebarFocus.Device;
+            }
+        }
+
+        EnforcePanelLayout();
     }
 
     private void ShowQuickCommandWindow()
     {
         if (_quickCommandWindow is null)
         {
-            _quickCommandWindow = new QuickCommandWindow(_viewModel)
-            {
-                Owner = this
-            };
+            _quickCommandWindow = new QuickCommandWindow(_viewModel);
             _quickCommandWindow.Closed += (_, _) => _quickCommandWindow = null;
             PositionToolWindow(_quickCommandWindow, 1040, 680);
             _quickCommandWindow.Show();
@@ -2835,26 +2925,6 @@ public partial class MainWindow : FluentWindow
         }
 
         _quickCommandWindow.Activate();
-    }
-
-    private void ShowDeviceWorkspaceWindow()
-    {
-        if (_deviceWorkspaceWindow is null)
-        {
-            _deviceWorkspaceWindow = new DeviceWorkspaceWindow(_viewModel)
-            {
-                Owner = this
-            };
-            _deviceWorkspaceWindow.Closed += (_, _) => _deviceWorkspaceWindow = null;
-            PositionToolWindow(_deviceWorkspaceWindow, 330, 640);
-            _deviceWorkspaceWindow.Show();
-        }
-        else if (!_deviceWorkspaceWindow.IsVisible)
-        {
-            _deviceWorkspaceWindow.Show();
-        }
-
-        _deviceWorkspaceWindow.Activate();
     }
 
     private void PositionToolWindow(Window window, double width, double height)
@@ -3328,26 +3398,19 @@ public partial class MainWindow : FluentWindow
         }
         finally
         {
-            CloseToolWindows();
+            CloseQuickCommandWindow();
             _closeApproved = true;
             _ = Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(Close));
         }
     }
 
-    private void CloseToolWindows()
+    private void CloseQuickCommandWindow()
     {
         QuickCommandWindow? quickWindow = _quickCommandWindow;
         _quickCommandWindow = null;
         if (quickWindow?.IsVisible == true)
         {
             quickWindow.Close();
-        }
-
-        DeviceWorkspaceWindow? deviceWindow = _deviceWorkspaceWindow;
-        _deviceWorkspaceWindow = null;
-        if (deviceWindow?.IsVisible == true)
-        {
-            deviceWindow.Close();
         }
     }
 }

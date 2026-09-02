@@ -36,6 +36,9 @@
             <SolidColorBrush x:Key="QuickCommandEditorHeaderBrush" Color="#DCE8F5" />
             <SolidColorBrush x:Key="QuickCommandEditorBorderBrush" Color="#9FB4CE" />
             <SolidColorBrush x:Key="QuickCommandEditorSectionBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="QuickCommandVariableGridLineBrush" Color="#B7C9DD" />
+            <SolidColorBrush x:Key="QuickCommandVariableRowBrush" Color="#F0F6FD" />
+            <SolidColorBrush x:Key="QuickCommandVariableAlternateRowBrush" Color="#DCEAF8" />
 
             <Style x:Key="RoundedButtonStyle" TargetType="Button">
                 <Setter Property="FocusVisualStyle" Value="{x:Null}" />

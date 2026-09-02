@@ -308,6 +308,55 @@ public sealed class ProfileAndImportTests
     }
 
     [Fact]
+    public void AutoGeneratesTemplateAndDefaultValuesFromPayload()
+    {
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Payload = "$TEST2595,9.690000,30"
+        });
+
+        Assert.True(command.TryAutoGenerateTemplateFromPayload());
+        Assert.Equal("$TEST2595,${param1},${param2}", command.Template);
+        Assert.Equal(
+            ["param1", "param2"],
+            command.SelectedVariableSet!.Variables.Select(variable => variable.Name));
+        Assert.Equal(
+            ["9.690000", "30"],
+            command.SelectedVariableSet.Variables.Select(variable => variable.Value));
+        Assert.Equal("$TEST2595,9.690000,30", command.ResolvedPayload);
+        Assert.Equal("$TEST2595,9.690000,30", command.Payload);
+    }
+
+    [Fact]
+    public void AutoGeneratesEmptyAssignmentParameters()
+    {
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Payload = "kas+pid=,,,"
+        });
+
+        Assert.True(command.TryAutoGenerateTemplateFromPayload());
+        Assert.Equal("kas+pid=${param1},${param2},${param3}", command.Template);
+        Assert.Equal(["param1", "param2", "param3"], command.SelectedVariableSet!.Variables.Select(variable => variable.Name));
+        Assert.All(command.SelectedVariableSet.Variables, variable => Assert.Empty(variable.Value));
+        Assert.Equal("kas+pid=,,,", command.Payload);
+    }
+
+    [Fact]
+    public void AutoGenerationDoesNotOverwriteHandWrittenTemplate()
+    {
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Payload = "$TEST2595,9.690000,30",
+            Template = "$TEST2595,${frequency},${mode}"
+        });
+
+        Assert.False(command.TryAutoGenerateTemplateFromPayload());
+        Assert.Equal("$TEST2595,${frequency},${mode}", command.Template);
+        Assert.Equal(["frequency", "mode"], command.SelectedVariableSet!.Variables.Select(variable => variable.Name));
+    }
+
+    [Fact]
     public void PreservesIndependentPayloadAndDirectSchemeTemplate()
     {
         QuickCommandItemViewModel command = new(new QuickCommand

@@ -49,8 +49,18 @@ public sealed record AppSettings
 public sealed class AppSettingsStore
 {
     private static readonly SemaphoreSlim SaveLock = new(1, 1);
-    private readonly string _path = Path.Combine(AppPaths.LocalDataDirectory, "settings.json");
+    private readonly string _path;
     private readonly JsonSerializerOptions _options = new() { WriteIndented = true };
+
+    public AppSettingsStore()
+        : this(Path.Combine(AppPaths.LocalDataDirectory, "settings.json"))
+    {
+    }
+
+    internal AppSettingsStore(string path)
+    {
+        _path = Path.GetFullPath(path);
+    }
 
     public async Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default)
     {
