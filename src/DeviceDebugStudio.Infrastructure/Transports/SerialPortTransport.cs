@@ -325,10 +325,25 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
     {
         EnsureConnected();
         NamedPipeServerStream commandPipe = _commandPipe ?? throw new InvalidOperationException("串口工作进程未初始化。");
+        bool traceControl = IsInteractiveSerialPayload(data.Span);
+        Stopwatch? stopwatch = traceControl ? Stopwatch.StartNew() : null;
+        if (traceControl)
+        {
+            WriteDebugLog(
+                _diagnosticAttemptId ?? "无连接编号",
+                $"父进程准备写入串口命令管道：字节={data.Length}，HEX={Convert.ToHexString(data.Span)}。");
+        }
+
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             await WriteFrameAsync(commandPipe, SendDataCommand, data, cancellationToken).ConfigureAwait(false);
+            if (traceControl)
+            {
+                WriteDebugLog(
+                    _diagnosticAttemptId ?? "无连接编号",
+                    $"父进程已完成串口命令管道写入：字节={data.Length}，耗时={stopwatch!.Elapsed.TotalMilliseconds:F1} ms。");
+            }
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
@@ -980,7 +995,26 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
                 case SendDataCommand:
                     if (command.Payload.Length > 0)
                     {
+                        bool flushImmediately = IsInteractiveSerialPayload(command.Payload);
+                        Stopwatch? stopwatch = flushImmediately ? Stopwatch.StartNew() : null;
+                        if (flushImmediately)
+                        {
+                            WriteDebugLog(
+                                attemptId,
+                                $"工作进程收到交互式串口发送命令：字节={command.Payload.Length}，"
+                                    + $"HEX={Convert.ToHexString(command.Payload)}。");
+                        }
+
                         port.Write(command.Payload, 0, command.Payload.Length);
+                        if (flushImmediately)
+                        {
+                            // USB CDC 可能把很短的写入留在驱动缓冲区，FlushFileBuffers 才会等待实际提交。
+                            port.BaseStream.Flush();
+                            WriteDebugLog(
+                                attemptId,
+                                $"工作进程已完成交互式串口发送：字节={command.Payload.Length}，"
+                                    + $"Write+Flush耗时={stopwatch!.Elapsed.TotalMilliseconds:F1} ms。");
+                        }
                     }
                     break;
                 case ClosePortCommand:
@@ -1484,6 +1518,9 @@ public sealed class SerialPortTransport(SerialTransportSettings settings) : Tran
         }
         return new WorkerFrame(header[0], payload);
     }
+
+    internal static bool IsInteractiveSerialPayload(ReadOnlySpan<byte> payload) =>
+        payload.Length > 0 && (payload.Length <= 64 || payload[0] == 0x1B);
 
     private static async Task ReadExactlyAsync(Stream stream, Memory<byte> buffer, CancellationToken cancellationToken)
     {

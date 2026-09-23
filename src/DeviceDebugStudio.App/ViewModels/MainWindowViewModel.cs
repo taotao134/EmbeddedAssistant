@@ -17,9 +17,11 @@ using CommunityToolkit.Mvvm.Input;
 using DeviceDebugStudio.Core.Profiles;
 using DeviceDebugStudio.Core.Protocol;
 using DeviceDebugStudio.Core.Sessions;
+using DeviceDebugStudio.Core.Terminal;
 using DeviceDebugStudio.Core.Transports;
 using DeviceDebugStudio.Infrastructure.Import;
 using DeviceDebugStudio.Infrastructure.Persistence;
+using DeviceDebugStudio.Infrastructure.Programming;
 using DeviceDebugStudio.Infrastructure.Transports;
 using DeviceDebugStudio.Infrastructure.Updates;
 using Serilog;
@@ -60,6 +62,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly ConcurrentQueue<TransportPacket> _pendingTerminal = new();
     private readonly List<TransportPacket> _serialTerminalBuffer = [];
     private readonly TerminalWaveSeparatorTracker _terminalWaveSeparatorTracker = new();
+    private readonly AnsiTerminalSession _ansiTerminal = new();
     private readonly ConcurrentQueue<FrameRecordItem> _pendingFrames = new();
     private readonly ConcurrentQueue<double> _pendingChartValues = new();
     private readonly object _transportDiagnosticLogLock = new();
@@ -147,6 +150,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _bleDiscovery = bleDiscovery;
         _bleGattBrowser = bleGattBrowser;
         TftpClient.PreferencesChanged += OnTftpPreferencesChanged;
+        JLink.PreferencesChanged += OnJLinkPreferencesChanged;
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         selectedTransportOption = TransportOptions[0];
         selectedWorkspaceMode = WorkspaceModes[0];
@@ -235,6 +239,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         new(WorkspaceMode.Bluetooth, "蓝牙"),
         new(WorkspaceMode.Modbus, "Modbus"),
         new(WorkspaceMode.Tftp, "TFTP"),
+        new(WorkspaceMode.JLink, "J-Link 烧录"),
         new(WorkspaceMode.PowerShell, "PowerShell")
     ];
 
@@ -291,7 +296,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public ICollectionView QuickCommandsView { get; }
     public ObservableCollection<ModbusRegisterItem> ModbusRegisters { get; } = [];
     public TftpClientViewModel TftpClient { get; } = new();
+    public JLinkProgrammerViewModel JLink { get; } = new();
     public PowerShellViewModel PowerShell { get; } = new();
+    public AnsiTerminalSession AnsiTerminal => _ansiTerminal;
     public int SelectedProfileDeleteCount => SelectedProfile is null
         ? 0
         : GetSelectedProfileDeleteTargets(SelectedProfile).Length;
@@ -299,6 +306,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public event Action<int>? RecordsAppended;
     public event Action<double>? ChartValueAdded;
     public event Action<UpdateCheckResult>? UpdateAvailable;
+    public event Action? AnsiTerminalReset;
 
     [ObservableProperty]
     private DeviceProfile? selectedProfile;
@@ -591,6 +599,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public bool IsBluetoothWorkspace => SelectedWorkspaceMode.Mode == WorkspaceMode.Bluetooth;
     public bool IsModbusWorkspace => SelectedWorkspaceMode.Mode == WorkspaceMode.Modbus;
     public bool IsTftpWorkspace => SelectedWorkspaceMode.Mode == WorkspaceMode.Tftp;
+    public bool IsJLinkWorkspace => SelectedWorkspaceMode.Mode == WorkspaceMode.JLink;
     public bool IsPowerShellWorkspace => SelectedWorkspaceMode.Mode == WorkspaceMode.PowerShell;
     public bool IsFrameWorkspaceVisible => SelectedWorkspaceMode.Mode is WorkspaceMode.Serial or WorkspaceMode.Network;
     public bool IsChartWorkspaceVisible => SelectedWorkspaceMode.Mode is WorkspaceMode.Serial or WorkspaceMode.Network or WorkspaceMode.Bluetooth;
@@ -1029,6 +1038,54 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             }
         }
         StatusText = $"文件发送完成：{sent} 字节";
+    }
+
+    public Task<bool> SendAnsiTerminalTextAsync(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return Task.FromResult(false);
+        }
+
+        return SendAnsiTerminalBytesAsync(
+            GetSelectedEncoding().GetBytes(text),
+            "ANSI终端文本");
+    }
+
+    public async Task<bool> SendAnsiTerminalBytesAsync(
+        ReadOnlyMemory<byte> data,
+        string source = "ANSI终端按键",
+        CancellationToken cancellationToken = default)
+    {
+        if (data.IsEmpty || !CanUseConnectedSession || _session is not { } session)
+        {
+            return false;
+        }
+
+        byte[] payload = data.ToArray();
+        try
+        {
+            await session.SendAsync(
+                    payload,
+                    cancellationToken: cancellationToken,
+                    sentAsHex: false)
+                .ConfigureAwait(true);
+            LogTransportDiagnostic(
+                PacketDirection.Send,
+                source,
+                session.Transport.DisplayName,
+                payload);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or ArgumentException)
+        {
+            Log.Warning(exception, "ANSI终端发送失败 | 来源={Source}", source);
+            return false;
+        }
     }
 
     public string ExportTerminalText() => string.Join(
@@ -1852,12 +1909,19 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private static IReadOnlyList<string> GetCommandVariableNames(string payload)
         => ByteText.GetVariableNames(payload);
 
+    private void ResetAnsiTerminal()
+    {
+        _ansiTerminal.Reset();
+        AnsiTerminalReset?.Invoke();
+    }
+
     [RelayCommand]
     private void ClearTerminal()
     {
         _pendingTerminal.Clear();
         _serialTerminalBuffer.Clear();
         _terminalWaveSeparatorTracker.Reset();
+        ResetAnsiTerminal();
         TerminalRecords.Clear();
         FrameRecords.Clear();
         StatusText = "已清空显示，捕获文件未删除";
@@ -2073,6 +2137,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             CancelWithoutThrow(source);
         }
         await TftpClient.DisposeAsync().ConfigureAwait(true);
+        await JLink.DisposeAsync().ConfigureAwait(true);
         await PowerShell.DisposeAsync().ConfigureAwait(true);
         await SaveActiveProfileSnapshotAsync(showStatus: false).ConfigureAwait(true);
         try
@@ -2506,7 +2571,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             WorkspaceMode.Modbus => 3,
             WorkspaceMode.Bluetooth => 4,
             WorkspaceMode.Tftp => 5,
-            WorkspaceMode.PowerShell => 6,
+            WorkspaceMode.JLink => 6,
+            WorkspaceMode.PowerShell => 7,
             _ => 0
         };
         if (value.Mode == WorkspaceMode.PowerShell)
@@ -2519,6 +2585,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(IsBluetoothWorkspace));
         OnPropertyChanged(nameof(IsModbusWorkspace));
         OnPropertyChanged(nameof(IsTftpWorkspace));
+        OnPropertyChanged(nameof(IsJLinkWorkspace));
         OnPropertyChanged(nameof(IsPowerShellWorkspace));
         OnPropertyChanged(nameof(IsFrameWorkspaceVisible));
         OnPropertyChanged(nameof(IsChartWorkspaceVisible));
@@ -2545,6 +2612,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     private void OnTftpPreferencesChanged() => ScheduleProfileSave();
+
+    private void OnJLinkPreferencesChanged() => ScheduleProfileSave();
 
     partial void OnSelectedFramingModeChanged(FramingMode value) =>
         OnPropertyChanged(nameof(SelectedFramingModeDescription));
@@ -3142,9 +3211,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             ICaptureStore capture = CaptureCommunication
                 ? new SqliteCaptureStore()
                 : new NullCaptureStore();
-            connectingSession = new CommunicationSession(SelectedProfile?.Name ?? "快速调试", transport, capture);
+            CommunicationSession newSession = new(SelectedProfile?.Name ?? "快速调试", transport, capture);
+            newSession.ReceivePacketHandler = (packet, token) =>
+                HandleAnsiTerminalPacketAsync(newSession, packet, token);
+            connectingSession = newSession;
             connectingSession.Faulted += OnSessionFaulted;
-            await connectingSession.ConnectAsync(
+            ResetAnsiTerminal();
+            await newSession.ConnectAsync(
                     cancellationToken,
                     CaptureCommunication ? BuildCaptureHistory() : null)
                 .ConfigureAwait(true);
@@ -3280,6 +3353,67 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 {
                     await RespondAsModbusSlaveAsync(packet).ConfigureAwait(false);
                 }
+            }
+        }
+    }
+
+    private async ValueTask HandleAnsiTerminalPacketAsync(
+        CommunicationSession session,
+        TransportPacket packet,
+        CancellationToken cancellationToken)
+    {
+        if (packet.Data.Length == 0)
+        {
+            return;
+        }
+
+        AnsiTerminalFeedResult ansiResult = _ansiTerminal.Feed(packet.Data);
+        await SendAnsiTerminalResponsesAsync(
+                session,
+                packet.Endpoint,
+                packet.ArrivalTimestamp,
+                ansiResult.Responses,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task SendAnsiTerminalResponsesAsync(
+        CommunicationSession session,
+        string endpoint,
+        long receiveArrivalTimestamp,
+        IReadOnlyList<byte[]> responses,
+        CancellationToken cancellationToken)
+    {
+        foreach (byte[] response in responses)
+        {
+            try
+            {
+                string? target = session.Transport.Kind == TransportKind.TcpServer
+                    ? endpoint
+                    : null;
+                await session.SendControlAsync(
+                        response,
+                        target,
+                        cancellationToken,
+                        sentAsHex: false)
+                    .ConfigureAwait(false);
+                Interlocked.Add(ref _txTotal, response.Length);
+                LogTransportDiagnostic(
+                    PacketDirection.Send,
+                    "ANSI/VT终端响应",
+                    endpoint,
+                    response,
+                    receiveArrivalTimestamp > 0
+                        ? $"探测响应耗时={Stopwatch.GetElapsedTime(receiveArrivalTimestamp).TotalMilliseconds:F1} ms"
+                        : null);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or ArgumentException)
+            {
+                Log.Warning(exception, "ANSI/VT 终端状态响应失败 | 端点={Endpoint}", endpoint);
             }
         }
     }
@@ -3759,6 +3893,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             WorkspaceMode.Bluetooth => [TransportKind.BleGatt],
             WorkspaceMode.Modbus => [TransportKind.Serial],
             WorkspaceMode.Tftp => [],
+            WorkspaceMode.JLink => [],
             WorkspaceMode.PowerShell => [],
             _ => [TransportKind.Serial]
         };
@@ -4261,6 +4396,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             }
 
             TftpClient.ApplyPreferences(profile.Tftp ?? new TftpPreferences());
+            JLink.ApplyPreferences(profile.JLink ?? new JLinkPreferences());
 
             SelectedEncodingName = profile.Terminal.EncodingName;
             SelectedQuickCommandDataFormat = NormalizeQuickCommandDataFormat(profile.Terminal.QuickCommandDataFormat);
@@ -4369,6 +4505,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             UiRecordLimit = _activeProfile?.Terminal.UiRecordLimit ?? 100_000
         },
         Tftp = TftpClient.CreatePreferences(),
+        JLink = JLink.CreatePreferences(),
         CommandGroups = CreateQuickCommandGroups(),
         FrameTemplate = _frameTemplate,
         FrameTemplates = _frameTemplates.ToList(),

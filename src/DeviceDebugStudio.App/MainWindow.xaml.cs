@@ -11,8 +11,10 @@ using System.Windows.Threading;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using DeviceDebugStudio.App.ViewModels;
+using DeviceDebugStudio.Core.Terminal;
 using DeviceDebugStudio.Core.Transports;
 using DeviceDebugStudio.Infrastructure.Persistence;
+using DeviceDebugStudio.Infrastructure.Programming;
 using DeviceDebugStudio.Infrastructure.Transports;
 using DeviceDebugStudio.Infrastructure.Updates;
 using Microsoft.Win32;
@@ -45,6 +47,9 @@ public partial class MainWindow : FluentWindow
     private const double TerminalEndpointColumnMinWidth = 70;
     private const double TerminalSizeColumnMinWidth = 38;
     private const double TerminalContentColumnMinWidth = 140;
+
+    /// <summary>判定“已到底部”的容差：文本视图单位为像素，表格视图单位为条目。</summary>
+    private const double TerminalScrollEndTolerance = 2;
     private const double FrameTimeColumnMinWidth = 60;
     private const double FrameLengthColumnMinWidth = 42;
     private const double FrameHexColumnMinWidth = 100;
@@ -83,9 +88,17 @@ public partial class MainWindow : FluentWindow
     private bool _terminalColumnDragActive;
     private double _terminalViewportWidth;
     private int _terminalAutoScrollGeneration;
-    private bool _terminalAutoScrollSuspended;
+
+    /// <summary>是否仍跟随终端底部；只由 ScrollChanged 维护，避免异步撤销造成的永久挂起。</summary>
+    private bool _terminalFollowTail = true;
+
+    /// <summary>离开底部后新到的记录数，用于右下角角标。</summary>
+    private int _terminalPendingNewCount;
     private int _terminalPlainTextCharacterCount;
     private bool _terminalPlainTextHadSelection;
+    private long _ansiTerminalRenderedVersion = -1;
+    private bool _ansiTerminalHadSelection;
+    private bool _ansiTerminalRenderPending;
     private bool _frameColumnDragActive;
     private double _frameViewportWidth;
     private bool _updatePromptVisible;
@@ -145,26 +158,6 @@ public partial class MainWindow : FluentWindow
             Thumb.DragCompletedEvent,
             new DragCompletedEventHandler(OnTerminalColumnHeaderDragCompleted),
             true);
-        TerminalList.AddHandler(
-            ScrollBar.PreviewMouseDownEvent,
-            new MouseButtonEventHandler(OnTerminalScrollBarPreviewMouseDown),
-            true);
-        TerminalList.AddHandler(
-            ScrollBar.PreviewMouseUpEvent,
-            new MouseButtonEventHandler(OnTerminalScrollBarPreviewMouseUp),
-            true);
-        TerminalList.AddHandler(
-            Mouse.PreviewMouseWheelEvent,
-            new MouseWheelEventHandler(OnTerminalListPreviewMouseWheel),
-            true);
-        TerminalPlainTextBox.AddHandler(
-            ScrollBar.PreviewMouseDownEvent,
-            new MouseButtonEventHandler(OnTerminalScrollBarPreviewMouseDown),
-            true);
-        TerminalPlainTextBox.AddHandler(
-            ScrollBar.PreviewMouseUpEvent,
-            new MouseButtonEventHandler(OnTerminalScrollBarPreviewMouseUp),
-            true);
         FrameList.AddHandler(
             Thumb.DragDeltaEvent,
             new DragDeltaEventHandler(OnFrameColumnHeaderDragDelta),
@@ -201,6 +194,7 @@ public partial class MainWindow : FluentWindow
 
         _viewModel.ChartValueAdded += OnChartValueAdded;
         _viewModel.RecordsAppended += OnRecordsAppended;
+        _viewModel.AnsiTerminalReset += OnAnsiTerminalReset;
         _viewModel.TerminalRecords.CollectionChanged += OnTerminalRecordsCollectionChanged;
         _viewModel.FrameRecords.CollectionChanged += OnFrameRecordsCollectionChanged;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
@@ -388,6 +382,7 @@ public partial class MainWindow : FluentWindow
         _quickCommandScrollTimer.Tick -= OnQuickCommandScrollTimerTick;
         _viewModel.UpdateAvailable -= OnUpdateAvailable;
         _viewModel.FrameRecords.CollectionChanged -= OnFrameRecordsCollectionChanged;
+        _viewModel.AnsiTerminalReset -= OnAnsiTerminalReset;
         base.OnClosed(e);
         bool hasVisibleWindow = Application.Current.Windows
             .OfType<MainWindow>()
@@ -412,35 +407,70 @@ public partial class MainWindow : FluentWindow
     private void OnRecordsAppended(int count)
     {
         AppendTerminalPlainText(count);
-        QueueTerminalAutoScroll();
+        if (ReferenceEquals(TerminalDisplayTabs.SelectedItem, AnsiTerminalTab))
+        {
+            RefreshAnsiTerminal();
+        }
+
+        if (!_viewModel.AutoScroll)
+        {
+            return;
+        }
+
+        // 跟随底部且无选区时直接回底；其余情况（已暂停跟随 / 选区挡住了滚动）计入新消息由角标提示。
+        if (_terminalFollowTail && IsTerminalViewSelectionEmpty())
+        {
+            QueueTerminalAutoScroll();
+            return;
+        }
+
+        _terminalPendingNewCount += count;
+        UpdateTerminalNewMessageBadge();
     }
 
     private void OnTerminalDisplaySelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!ReferenceEquals(e.Source, TerminalDisplayTabs) || !_viewModel.AutoScroll)
         {
+            if (ReferenceEquals(e.Source, TerminalDisplayTabs)
+                && ReferenceEquals(TerminalDisplayTabs.SelectedItem, AnsiTerminalTab))
+            {
+                RefreshAnsiTerminal(force: true);
+            }
             return;
         }
 
+        if (ReferenceEquals(TerminalDisplayTabs.SelectedItem, AnsiTerminalTab))
+        {
+            RefreshAnsiTerminal(force: true);
+            _ = Dispatcher.BeginInvoke(
+                DispatcherPriority.Input,
+                new Action(() =>
+                {
+                    if (!_closing && ReferenceEquals(TerminalDisplayTabs.SelectedItem, AnsiTerminalTab))
+                    {
+                        AnsiTerminalBox.Focus();
+                    }
+                }));
+        }
         QueueTerminalAutoScroll();
     }
 
+    /// <summary>
+    /// 排队把当前终端视图滚到底部
+    /// </summary>
+    /// <remarks>挂起跟随或关闭自动滚动时不滚动；两个优先级各补一次，覆盖文档与虚拟化列表不同的布局周期。</remarks>
     private void QueueTerminalAutoScroll()
     {
-        if (_terminalAutoScrollSuspended && !IsTerminalAtEnd())
+        if (!_viewModel.AutoScroll || !_terminalFollowTail)
         {
             return;
-        }
-
-        if (_terminalAutoScrollSuspended)
-        {
-            _terminalAutoScrollSuspended = false;
         }
 
         int generation = ++_terminalAutoScrollGeneration;
         Action scrollAction = () =>
         {
-            if (generation != _terminalAutoScrollGeneration || !_viewModel.AutoScroll || _terminalAutoScrollSuspended)
+            if (generation != _terminalAutoScrollGeneration || !_viewModel.AutoScroll || !_terminalFollowTail)
             {
                 return;
             }
@@ -462,10 +492,148 @@ public partial class MainWindow : FluentWindow
                 TerminalPlainTextBox.CaretPosition = TerminalPlainTextBox.Document.ContentEnd;
                 TerminalPlainTextBox.ScrollToEnd();
             }
+            else if (TerminalDisplayTabs.SelectedItem == AnsiTerminalTab)
+            {
+                if (!AnsiTerminalBox.Selection.IsEmpty)
+                {
+                    return;
+                }
+                AnsiTerminalBox.CaretPosition = AnsiTerminalBox.Document.ContentEnd;
+                AnsiTerminalBox.ScrollToEnd();
+            }
+            else
+            {
+                return;
+            }
+
+            // 已经贴底时不会再触发 ScrollChanged，这里显式收尾，避免角标残留。
+            ResumeTerminalTailFollowing();
         };
-        // 文档和虚拟化列表可能在不同的布局周期才产生最终高度，补一次空闲周期确保滚动到真实底部。
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, scrollAction);
         Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, scrollAction);
+    }
+
+    /// <summary>
+    /// 恢复跟随底部并清空新消息角标
+    /// </summary>
+    private void ResumeTerminalTailFollowing()
+    {
+        _terminalFollowTail = true;
+        _terminalPendingNewCount = 0;
+        UpdateTerminalNewMessageBadge();
+    }
+
+    /// <summary>
+    /// 暂停跟随底部并显示角标
+    /// </summary>
+    private void PauseTerminalTailFollowing()
+    {
+        if (!_terminalFollowTail)
+        {
+            UpdateTerminalNewMessageBadge();
+            return;
+        }
+
+        _terminalFollowTail = false;
+        _terminalPendingNewCount = 0;
+        UpdateTerminalNewMessageBadge();
+    }
+
+    /// <summary>
+    /// 刷新右下角“新消息/回到底部”角标
+    /// </summary>
+    private void UpdateTerminalNewMessageBadge()
+    {
+        if (TerminalNewMessageBadge is null || TerminalNewMessageBadgeText is null)
+        {
+            return;
+        }
+
+        bool visible = _viewModel.AutoScroll && (!_terminalFollowTail || _terminalPendingNewCount > 0);
+        TerminalNewMessageBadge.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (visible)
+        {
+            TerminalNewMessageBadgeText.Text = _terminalPendingNewCount > 0
+                ? $"↓ {_terminalPendingNewCount:N0} 条新消息"
+                : "↓ 回到底部";
+        }
+    }
+
+    /// <summary>
+    /// 依据滚动位置变化维护跟随状态
+    /// </summary>
+    /// <param name="e">本次滚动参数，用于还原变化前的偏移与高度</param>
+    /// <remarks>跟随状态只在这里翻转，滚动到底即恢复，不再依赖一次性异步检查，避免被后台数据刷新抢在前面导致永久挂起。</remarks>
+    private void UpdateTerminalFollowState(ScrollChangedEventArgs e)
+    {
+        double previousOffset = e.VerticalOffset - e.VerticalChange;
+        double previousExtent = e.ExtentHeight - e.ExtentHeightChange;
+        double previousViewport = e.ViewportHeight - e.ViewportHeightChange;
+        bool wasAtEndBefore = previousOffset + previousViewport >= previousExtent - TerminalScrollEndTolerance;
+        bool isAtEndNow = e.VerticalOffset + e.ViewportHeight >= e.ExtentHeight - TerminalScrollEndTolerance;
+
+        if (isAtEndNow)
+        {
+            // 只有“刚刚抵达底部”才恢复跟随：布局重排或切换页签的静止观测不能改状态，
+            // 否则切回已停在底部的页签会误清掉新消息角标。
+            if (!wasAtEndBefore)
+            {
+                ResumeTerminalTailFollowing();
+            }
+            return;
+        }
+
+        // 偏移没动却被内容或视口变化推离底部，属于跟随中的被动偏离，保持姿态并拉回。
+        if (Math.Abs(e.VerticalChange) < 0.01 && wasAtEndBefore)
+        {
+            QueueTerminalAutoScroll();
+            return;
+        }
+
+        PauseTerminalTailFollowing();
+    }
+
+    /// <summary>
+    /// 判断当前终端视图是否存在选区（有选区时不滚动，避免打断复制）
+    /// </summary>
+    private bool IsTerminalViewSelectionEmpty()
+    {
+        if (ReferenceEquals(TerminalDisplayTabs.SelectedItem, AnsiTerminalTab))
+        {
+            return AnsiTerminalBox.Selection.IsEmpty;
+        }
+
+        return ReferenceEquals(TerminalDisplayTabs.SelectedItem, TerminalPlainTextTab)
+            ? TerminalPlainTextBox.Selection.IsEmpty
+            : true;
+    }
+
+    private void OnTerminalTextScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (e.OriginalSource is ScrollViewer)
+        {
+            UpdateTerminalFollowState(e);
+        }
+    }
+
+    private void OnTerminalNewMessageBadgeClick(object sender, RoutedEventArgs e)
+    {
+        // 选区会挡住回底滚动，先收起选区再回底。
+        if (!TerminalPlainTextBox.Selection.IsEmpty)
+        {
+            TerminalPlainTextBox.Selection.Select(
+                TerminalPlainTextBox.Document.ContentEnd,
+                TerminalPlainTextBox.Document.ContentEnd);
+        }
+        if (!AnsiTerminalBox.Selection.IsEmpty)
+        {
+            AnsiTerminalBox.Selection.Select(
+                AnsiTerminalBox.Document.ContentEnd,
+                AnsiTerminalBox.Document.ContentEnd);
+        }
+
+        ResumeTerminalTailFollowing();
+        QueueTerminalAutoScroll();
     }
 
     private void OnTerminalListSizeChanged(object sender, SizeChangedEventArgs e)
@@ -473,81 +641,11 @@ public partial class MainWindow : FluentWindow
         UpdateTerminalColumnWidths();
     }
 
-    private void OnTerminalScrollBarPreviewMouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ChangedButton != MouseButton.Left)
-        {
-            return;
-        }
-
-        SuspendTerminalAutoScrollForUserInput();
-    }
-
-    private void OnTerminalScrollBarPreviewMouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ChangedButton != MouseButton.Left)
-        {
-            return;
-        }
-
-        _ = Dispatcher.BeginInvoke(
-            DispatcherPriority.ContextIdle,
-            new Action(ReconcileTerminalAutoScrollState));
-    }
-
-    private void OnTerminalListPreviewMouseWheel(object sender, MouseWheelEventArgs e)
-    {
-        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
-        {
-            return;
-        }
-
-        ScrollViewer? viewer = FindVisualChild<ScrollViewer>(TerminalList);
-        if (viewer is not null && CanScroll(viewer, e.Delta))
-        {
-            SuspendTerminalAutoScrollForUserInput();
-            _ = Dispatcher.BeginInvoke(
-                DispatcherPriority.ContextIdle,
-                new Action(ReconcileTerminalAutoScrollState));
-        }
-    }
-
-    private void SuspendTerminalAutoScrollForUserInput()
-    {
-        _terminalAutoScrollSuspended = true;
-        _terminalAutoScrollGeneration++;
-    }
-
-    private void ReconcileTerminalAutoScrollState()
-    {
-        if (IsTerminalAtEnd())
-        {
-            _terminalAutoScrollSuspended = false;
-        }
-    }
-
-    private bool IsTerminalAtEnd()
-    {
-        if (TerminalDisplayTabs.SelectedItem == TerminalTableTab)
-        {
-            ScrollViewer? tableViewer = FindVisualChild<ScrollViewer>(TerminalList);
-            return tableViewer is not null
-                && tableViewer.VerticalOffset >= tableViewer.ScrollableHeight - 2;
-        }
-
-        ScrollViewer? textViewer = FindVisualChild<ScrollViewer>(TerminalPlainTextBox);
-        return textViewer is null || textViewer.VerticalOffset >= textViewer.ScrollableHeight - 2;
-    }
-
     private void OnTerminalListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        ScrollViewer? viewer = e.OriginalSource as ScrollViewer ?? FindVisualChild<ScrollViewer>(TerminalList);
-        // 布局和虚拟化同样会触发 ScrollChanged，不能据此推断用户已离开底部。
-        if (viewer is not null
-            && Math.Abs(e.ExtentHeightChange) < 0.01
-            && viewer.VerticalOffset >= viewer.ScrollableHeight - 2)
+        if (e.OriginalSource is ScrollViewer)
         {
-            _terminalAutoScrollSuspended = false;
+            UpdateTerminalFollowState(e);
         }
 
         double viewportWidth = GetTerminalViewportWidth();
@@ -744,38 +842,11 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
-        bool hasSelection = !TerminalPlainTextBox.Selection.IsEmpty;
         int start = _viewModel.TerminalRecords.Count - actualCount;
         AppendTerminalPlainTextEntries(BuildTerminalPlainTextEntries(start, actualCount));
         if (_terminalPlainTextCharacterCount > 4_000_000)
         {
             RebuildTerminalPlainText(3_000_000);
-            hasSelection = false;
-        }
-
-        if (!hasSelection && _viewModel.AutoScroll)
-        {
-            QueueTerminalAutoScroll();
-        }
-    }
-
-    private void OnTerminalPlainTextPreviewMouseWheel(object sender, MouseWheelEventArgs e)
-    {
-        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
-        {
-            return;
-        }
-
-        ScrollViewer? viewer = FindVisualChild<ScrollViewer>(TerminalPlainTextBox);
-        if (viewer is not null && CanScroll(viewer, e.Delta))
-        {
-            SuspendTerminalAutoScrollForUserInput();
-            _ = Dispatcher.BeginInvoke(
-                DispatcherPriority.ContextIdle,
-                new Action(() =>
-                {
-                    ReconcileTerminalAutoScrollState();
-                }));
         }
     }
 
@@ -788,6 +859,318 @@ public partial class MainWindow : FluentWindow
         {
             QueueTerminalAutoScroll();
         }
+    }
+
+    private async void OnAnsiTerminalPreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (string.IsNullOrEmpty(e.Text))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await _viewModel.SendAnsiTerminalTextAsync(e.Text);
+    }
+
+    private async void OnAnsiTerminalPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.C
+            && (Keyboard.Modifiers & ModifierKeys.Control) != 0
+            && !AnsiTerminalBox.Selection.IsEmpty)
+        {
+            return;
+        }
+
+        if (e.Key == Key.V
+            && (Keyboard.Modifiers & ModifierKeys.Control) != 0
+            && Clipboard.ContainsText())
+        {
+            e.Handled = true;
+            await _viewModel.SendAnsiTerminalTextAsync(Clipboard.GetText());
+            return;
+        }
+
+        byte[]? payload = BuildAnsiTerminalKeyPayload(e.Key, Keyboard.Modifiers);
+        if (payload is null)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await _viewModel.SendAnsiTerminalBytesAsync(payload);
+    }
+
+    private void OnAnsiTerminalSelectionChanged(object sender, RoutedEventArgs e)
+    {
+        bool hasSelection = !AnsiTerminalBox.Selection.IsEmpty;
+        bool selectionWasCleared = _ansiTerminalHadSelection && !hasSelection;
+        _ansiTerminalHadSelection = hasSelection;
+        if (selectionWasCleared && _ansiTerminalRenderPending)
+        {
+            RefreshAnsiTerminal(force: true);
+        }
+
+        if (selectionWasCleared && _viewModel.AutoScroll)
+        {
+            QueueTerminalAutoScroll();
+        }
+    }
+
+    private void OnAnsiTerminalReset()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(OnAnsiTerminalReset));
+            return;
+        }
+
+        _ansiTerminalRenderedVersion = -1;
+        _ansiTerminalRenderPending = false;
+        RefreshAnsiTerminal(force: true);
+    }
+
+    private void OnSelectAllAnsiTerminalTextClick(object sender, RoutedEventArgs e)
+    {
+        AnsiTerminalBox.Focus();
+        AnsiTerminalBox.SelectAll();
+    }
+
+    private void RefreshAnsiTerminal(bool force = false)
+    {
+        AnsiTerminalSnapshot snapshot = _viewModel.AnsiTerminal.GetSnapshot();
+        if (!force && snapshot.Version == _ansiTerminalRenderedVersion)
+        {
+            return;
+        }
+
+        if (!force && !AnsiTerminalBox.Selection.IsEmpty)
+        {
+            _ansiTerminalRenderPending = true;
+            return;
+        }
+
+        ScrollViewer? previousViewer = FindVisualChild<ScrollViewer>(AnsiTerminalBox);
+        double previousOffset = previousViewer?.VerticalOffset ?? 0;
+        bool wasAtEnd = previousViewer is null || IsTerminalViewerAtEnd(previousViewer);
+        FlowDocument document = AnsiTerminalBox.Document;
+        document.Blocks.Clear();
+        Paragraph paragraph = new() { Margin = new Thickness(0) };
+        document.Blocks.Add(paragraph);
+        Brush defaultForeground = (Brush)FindResource("TerminalTextBrush");
+        Brush defaultBackground = (Brush)FindResource("TerminalBackgroundBrush");
+        for (int rowIndex = 0; rowIndex < snapshot.Lines.Count; rowIndex++)
+        {
+            if (rowIndex > 0)
+            {
+                paragraph.Inlines.Add(new LineBreak());
+            }
+
+            AppendAnsiLineRuns(
+                paragraph,
+                snapshot.Lines[rowIndex],
+                rowIndex,
+                snapshot,
+                defaultForeground,
+                defaultBackground);
+        }
+
+        AnsiTerminalBox.CaretPosition = document.ContentEnd;
+        _ansiTerminalRenderedVersion = snapshot.Version;
+        _ansiTerminalRenderPending = false;
+        RestoreTerminalTextScroll(AnsiTerminalBox, previousOffset, wasAtEnd);
+    }
+
+    /// <summary>
+    /// 判断滚动视图是否已到底部
+    /// </summary>
+    /// <param name="viewer">目标滚动视图</param>
+    private static bool IsTerminalViewerAtEnd(ScrollViewer viewer) =>
+        viewer.VerticalOffset >= viewer.ScrollableHeight - TerminalScrollEndTolerance;
+
+    /// <summary>
+    /// 文档被整体重建后恢复滚动位置
+    /// </summary>
+    /// <param name="box">目标文本终端</param>
+    /// <param name="offset">重建前的滚动偏移</param>
+    /// <param name="wasAtEnd">重建前是否贴底</param>
+    /// <remarks>
+    /// 重建会把视图清到文档顶部，必须无条件决定去向：跟随中或原本贴底就贴底，否则拉回阅读位置。
+    /// 旧写法在“原本贴底但已暂停跟随”时两个分支都不走，视图会留在顶部。
+    /// </remarks>
+    private void RestoreTerminalTextScroll(RichTextBox box, double offset, bool wasAtEnd)
+    {
+        _ = Dispatcher.BeginInvoke(
+            DispatcherPriority.ContextIdle,
+            new Action(() =>
+            {
+                ScrollViewer? viewer = FindVisualChild<ScrollViewer>(box);
+                if (viewer is null)
+                {
+                    return;
+                }
+
+                if ((_viewModel.AutoScroll && _terminalFollowTail) || wasAtEnd)
+                {
+                    viewer.ScrollToEnd();
+                }
+                else
+                {
+                    viewer.ScrollToVerticalOffset(offset);
+                }
+            }));
+    }
+
+    private static void AppendAnsiLineRuns(
+        Paragraph paragraph,
+        AnsiTerminalLine line,
+        int rowIndex,
+        AnsiTerminalSnapshot snapshot,
+        Brush defaultForeground,
+        Brush defaultBackground)
+    {
+        IReadOnlyList<AnsiTerminalCell> cells = line.Cells;
+        int start = 0;
+        while (start < cells.Count)
+        {
+            bool cursor = snapshot.CursorVisible
+                && snapshot.CursorRow == rowIndex
+                && snapshot.CursorColumn == start;
+            AnsiTerminalCell style = cells[start];
+            int end = start + 1;
+            while (end < cells.Count
+                && cells[end].Equals(style)
+                && !(snapshot.CursorVisible
+                    && snapshot.CursorRow == rowIndex
+                    && snapshot.CursorColumn == end))
+            {
+                end++;
+            }
+
+            StringBuilder text = new(end - start);
+            for (int index = start; index < end; index++)
+            {
+                text.Append(cells[index].Character);
+            }
+
+            Run run = new(text.ToString())
+            {
+                FontWeight = style.Bold ? FontWeights.Bold : FontWeights.Normal
+            };
+            ApplyAnsiRunStyle(run, style, cursor, defaultForeground, defaultBackground);
+            paragraph.Inlines.Add(run);
+            start = end;
+        }
+    }
+
+    private static void ApplyAnsiRunStyle(
+        Run run,
+        AnsiTerminalCell cell,
+        bool cursor,
+        Brush defaultForeground,
+        Brush defaultBackground)
+    {
+        Brush foreground = ResolveAnsiBrush(cell.Foreground, defaultForeground);
+        Brush? background = cell.Background == AnsiTerminalColor.Default
+            ? null
+            : ResolveAnsiBrush(cell.Background, defaultBackground);
+        if (cell.Inverse)
+        {
+            Brush originalForeground = foreground;
+            foreground = background ?? defaultBackground;
+            background = originalForeground;
+        }
+
+        if (cursor)
+        {
+            foreground = Brushes.Black;
+            background = Brushes.White;
+        }
+
+        run.Foreground = foreground;
+        run.Background = background;
+    }
+
+    private static Brush ResolveAnsiBrush(AnsiTerminalColor color, Brush defaultBrush)
+    {
+        if (color == AnsiTerminalColor.Default)
+        {
+            return defaultBrush;
+        }
+
+        SolidColorBrush brush = new(GetAnsiColor(color));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static Color GetAnsiColor(AnsiTerminalColor color) => color switch
+    {
+        AnsiTerminalColor.Black => Color.FromRgb(0x00, 0x00, 0x00),
+        AnsiTerminalColor.Red => Color.FromRgb(0xCD, 0x31, 0x31),
+        AnsiTerminalColor.Green => Color.FromRgb(0x0D, 0xBC, 0x79),
+        AnsiTerminalColor.Yellow => Color.FromRgb(0xE5, 0xE5, 0x10),
+        AnsiTerminalColor.Blue => Color.FromRgb(0x24, 0x72, 0xC8),
+        AnsiTerminalColor.Magenta => Color.FromRgb(0xBC, 0x3F, 0xBC),
+        AnsiTerminalColor.Cyan => Color.FromRgb(0x11, 0xA8, 0xCD),
+        AnsiTerminalColor.White => Color.FromRgb(0xE5, 0xE5, 0xE5),
+        AnsiTerminalColor.BrightBlack => Color.FromRgb(0x66, 0x66, 0x66),
+        AnsiTerminalColor.BrightRed => Color.FromRgb(0xE7, 0x48, 0x56),
+        AnsiTerminalColor.BrightGreen => Color.FromRgb(0x23, 0xD1, 0x8B),
+        AnsiTerminalColor.BrightYellow => Color.FromRgb(0xF5, 0xF5, 0x43),
+        AnsiTerminalColor.BrightBlue => Color.FromRgb(0x3B, 0x8E, 0xD0),
+        AnsiTerminalColor.BrightMagenta => Color.FromRgb(0xD6, 0x70, 0xD6),
+        AnsiTerminalColor.BrightCyan => Color.FromRgb(0x29, 0xD4, 0xE8),
+        AnsiTerminalColor.BrightWhite => Color.FromRgb(0xFF, 0xFF, 0xFF),
+        _ => Color.FromRgb(0xF8, 0xFA, 0xFC)
+    };
+
+    private static byte[]? BuildAnsiTerminalKeyPayload(Key key, ModifierKeys modifiers)
+    {
+        ModifierKeys relevantModifiers = modifiers & (ModifierKeys.Control | ModifierKeys.Shift | ModifierKeys.Alt);
+        if ((relevantModifiers & ModifierKeys.Alt) != 0)
+        {
+            return null;
+        }
+
+        if ((relevantModifiers & ModifierKeys.Control) != 0)
+        {
+            return key switch
+            {
+                Key.C => [0x03],
+                Key.D => [0x04],
+                Key.L => [0x0C],
+                Key.U => [0x15],
+                Key.Z => [0x1A],
+                _ => null
+            };
+        }
+
+        if (key == Key.Tab && (relevantModifiers & ModifierKeys.Shift) != 0)
+        {
+            return [0x1B, 0x5B, 0x5A];
+        }
+
+        return key switch
+        {
+            Key.Enter => [0x0D],
+            Key.Back => [0x7F],
+            Key.Tab => [0x09],
+            Key.Escape => [0x1B],
+            Key.Up => [0x1B, 0x5B, 0x41],
+            Key.Down => [0x1B, 0x5B, 0x42],
+            Key.Right => [0x1B, 0x5B, 0x43],
+            Key.Left => [0x1B, 0x5B, 0x44],
+            Key.Home => [0x1B, 0x5B, 0x48],
+            Key.End => [0x1B, 0x5B, 0x46],
+            Key.Insert => [0x1B, 0x5B, 0x32, 0x7E],
+            Key.Delete => [0x1B, 0x5B, 0x33, 0x7E],
+            Key.PageUp => [0x1B, 0x5B, 0x35, 0x7E],
+            Key.PageDown => [0x1B, 0x5B, 0x36, 0x7E],
+            Key.F1 => [0x1B, 0x4F, 0x50],
+            Key.F2 => [0x1B, 0x4F, 0x51],
+            Key.F3 => [0x1B, 0x4F, 0x52],
+            Key.F4 => [0x1B, 0x4F, 0x53],
+            _ => null
+        };
     }
 
     private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
@@ -928,12 +1311,12 @@ public partial class MainWindow : FluentWindow
             retainedCharacters += text.Length;
         }
         entries.Reverse();
+        ScrollViewer? previousViewer = FindVisualChild<ScrollViewer>(TerminalPlainTextBox);
+        double previousOffset = previousViewer?.VerticalOffset ?? 0;
+        bool wasAtEnd = previousViewer is null || IsTerminalViewerAtEnd(previousViewer);
         ResetTerminalPlainTextDocument();
         AppendTerminalPlainTextEntries(entries);
-        if (_viewModel.AutoScroll && TerminalPlainTextBox.Selection.IsEmpty)
-        {
-            QueueTerminalAutoScroll();
-        }
+        RestoreTerminalTextScroll(TerminalPlainTextBox, previousOffset, wasAtEnd);
     }
 
     private static bool IsConnectionStatusRecord(TerminalRecordItem item) =>
@@ -964,6 +1347,8 @@ public partial class MainWindow : FluentWindow
         if (e.Action == NotifyCollectionChangedAction.Reset && _viewModel.TerminalRecords.Count == 0)
         {
             ResetTerminalPlainTextDocument();
+            RefreshAnsiTerminal(force: true);
+            ResumeTerminalTailFollowing();
         }
     }
 
@@ -974,7 +1359,8 @@ public partial class MainWindow : FluentWindow
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainWindowViewModel.IsPowerShellWorkspace))
+        if (e.PropertyName is nameof(MainWindowViewModel.IsPowerShellWorkspace)
+            or nameof(MainWindowViewModel.IsJLinkWorkspace))
         {
             EnforcePanelLayout();
         }
@@ -982,18 +1368,25 @@ public partial class MainWindow : FluentWindow
         {
             if (_viewModel.AutoScroll)
             {
-                _terminalAutoScrollSuspended = false;
+                ResumeTerminalTailFollowing();
                 if (!TerminalPlainTextBox.Selection.IsEmpty)
                 {
                     TerminalPlainTextBox.Selection.Select(
                         TerminalPlainTextBox.Document.ContentEnd,
                         TerminalPlainTextBox.Document.ContentEnd);
                 }
+                if (!AnsiTerminalBox.Selection.IsEmpty)
+                {
+                    AnsiTerminalBox.Selection.Select(
+                        AnsiTerminalBox.Document.ContentEnd,
+                        AnsiTerminalBox.Document.ContentEnd);
+                }
                 QueueTerminalAutoScroll();
             }
             else
             {
                 _terminalAutoScrollGeneration++;
+                UpdateTerminalNewMessageBadge();
             }
         }
         else if (e.PropertyName is nameof(MainWindowViewModel.ReceiveAsHex)
@@ -1204,20 +1597,6 @@ public partial class MainWindow : FluentWindow
 
     private void OnTerminalPreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) == ModifierKeys.None
-            && e.Key is Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End)
-        {
-            ScrollViewer? viewer = FindVisualChild<ScrollViewer>(TerminalList);
-            int direction = e.Key is Key.Up or Key.PageUp or Key.Home ? 1 : -1;
-            if (viewer is not null && CanScroll(viewer, direction))
-            {
-                SuspendTerminalAutoScrollForUserInput();
-                _ = Dispatcher.BeginInvoke(
-                    DispatcherPriority.ContextIdle,
-                    new Action(ReconcileTerminalAutoScrollState));
-            }
-        }
-
         if ((Keyboard.Modifiers & ModifierKeys.Control) == 0)
         {
             return;
@@ -1610,6 +1989,7 @@ public partial class MainWindow : FluentWindow
         Loaded -= OnMainWindowLoaded;
         UpdateResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width);
         EnforcePanelLayout();
+        RefreshAnsiTerminal(force: true);
         _ = Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(PrewarmBaudRateComboBox));
     }
 
@@ -2639,6 +3019,73 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    private void OnJLinkBrowseExecutableClick(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.JLink.IsBusy)
+        {
+            return;
+        }
+
+        string initialDirectory = string.Empty;
+        string configuredPath = _viewModel.JLink.ExecutablePath.Trim();
+        try
+        {
+            string resolvedPath = JLinkProgrammer.ResolveExecutablePath(configuredPath);
+            if (File.Exists(resolvedPath))
+            {
+                initialDirectory = Path.GetDirectoryName(resolvedPath) ?? string.Empty;
+            }
+        }
+        catch (FileNotFoundException)
+        {
+        }
+
+        OpenFileDialog dialog = new()
+        {
+            Title = "选择 J-Link 命令行工具",
+            Filter = "J-Link 工具 (JLink.exe)|JLink.exe|可执行文件 (*.exe)|*.exe|所有文件 (*.*)|*.*",
+            InitialDirectory = initialDirectory
+        };
+        if (dialog.ShowDialog(this) == true)
+        {
+            _viewModel.JLink.ExecutablePath = dialog.FileName;
+        }
+    }
+
+    private void OnJLinkBrowseFirmwareClick(object sender, RoutedEventArgs e)
+    {
+        if (_viewModel.JLink.IsBusy)
+        {
+            return;
+        }
+
+        string initialDirectory = string.Empty;
+        string configuredPath = _viewModel.JLink.FirmwareFile.Trim();
+        if (File.Exists(configuredPath))
+        {
+            initialDirectory = Path.GetDirectoryName(configuredPath) ?? string.Empty;
+        }
+
+        OpenFileDialog dialog = new()
+        {
+            Title = "选择 STM32 固件文件",
+            Filter = "固件文件 (*.bin;*.hex;*.elf;*.srec)|*.bin;*.hex;*.elf;*.srec|所有文件 (*.*)|*.*",
+            InitialDirectory = initialDirectory
+        };
+        if (dialog.ShowDialog(this) == true)
+        {
+            _viewModel.JLink.SetFirmwareFile(dialog.FileName);
+        }
+    }
+
+    private void OnJLinkLogTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (sender is TextBox textBox && textBox.SelectionLength == 0)
+        {
+            textBox.ScrollToEnd();
+        }
+    }
+
     private void OnTftpLogTextChanged(object sender, TextChangedEventArgs e)
     {
         if (sender is TextBox textBox && textBox.SelectionLength == 0)
@@ -2937,6 +3384,7 @@ public partial class MainWindow : FluentWindow
 
     private bool CanDockCommandPanel(double totalWidth) =>
         !_viewModel.IsPowerShellWorkspace
+        && !_viewModel.IsJLinkWorkspace
         && totalWidth >= CurrentWorkspaceMinWidth + CurrentCommandPanelMinWidth + SplitterWidth;
 
     private bool CanDockDevicePanel(double totalWidth) =>
@@ -2949,7 +3397,7 @@ public partial class MainWindow : FluentWindow
         {
             required += CurrentDevicePanelMinWidth + SplitterWidth;
         }
-        if (_commandDesiredOpen && !_viewModel.IsPowerShellWorkspace)
+        if (_commandDesiredOpen && !_viewModel.IsPowerShellWorkspace && !_viewModel.IsJLinkWorkspace)
         {
             required += CurrentCommandPanelMinWidth + SplitterWidth;
         }
@@ -2958,7 +3406,7 @@ public partial class MainWindow : FluentWindow
 
     private bool ShouldFocusCommandPanel()
     {
-        if (_viewModel.IsPowerShellWorkspace)
+        if (_viewModel.IsPowerShellWorkspace || _viewModel.IsJLinkWorkspace)
         {
             return false;
         }
@@ -2972,7 +3420,10 @@ public partial class MainWindow : FluentWindow
     {
         double totalWidth = ActualWidth;
         return !CanDockDevicePanel(totalWidth)
-            || _commandDesiredOpen && !_viewModel.IsPowerShellWorkspace && !CanDockDesiredPanels(totalWidth);
+            || _commandDesiredOpen
+                && !_viewModel.IsPowerShellWorkspace
+                && !_viewModel.IsJLinkWorkspace
+                && !CanDockDesiredPanels(totalWidth);
     }
 
     private void UpdateResponsiveLayout(double totalWidth)
@@ -3173,8 +3624,8 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
-        bool powerShellWorkspace = _viewModel.IsPowerShellWorkspace;
-        if (powerShellWorkspace && _sidebarFocus == SidebarFocus.Command)
+        bool utilityWorkspace = _viewModel.IsPowerShellWorkspace || _viewModel.IsJLinkWorkspace;
+        if (utilityWorkspace && _sidebarFocus == SidebarFocus.Command)
         {
             _sidebarFocus = SidebarFocus.None;
         }
@@ -3192,7 +3643,7 @@ public partial class MainWindow : FluentWindow
         // replacing the workspace or leaving an empty trailing area.
         bool showWorkspace = true;
 
-        if (_sidebarFocus == SidebarFocus.Command && !powerShellWorkspace)
+        if (_sidebarFocus == SidebarFocus.Command && !utilityWorkspace)
         {
             commandWidth = Math.Clamp(
                 _commandPanelExpandedWidth.Value,
@@ -3207,7 +3658,7 @@ public partial class MainWindow : FluentWindow
         }
         else
         {
-            commandWidth = !powerShellWorkspace && _commandDesiredOpen && CanDockCommandPanel(totalWidth)
+            commandWidth = !utilityWorkspace && _commandDesiredOpen && CanDockCommandPanel(totalWidth)
                 ? ClampCommandPanelWidth(_commandPanelExpandedWidth.Value, totalWidth)
                 : 0;
             double occupied = CurrentWorkspaceMinWidth + (commandWidth > 0 ? commandWidth + SplitterWidth : 0);

@@ -1,6 +1,6 @@
 # 嵌入式调试台
 
-面向 Windows 的串口、TCP、UDP、BLE 与常用嵌入式协议调试工作台。
+面向 Windows 的串口、TCP、UDP、BLE、J-Link 烧录与常用嵌入式协议调试工作台。
 
 ## 构建
 

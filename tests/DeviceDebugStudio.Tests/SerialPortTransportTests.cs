@@ -76,6 +76,16 @@ public sealed class SerialPortTransportTests
     }
 
     [Fact]
+    public void InteractiveSerialPayloadPolicyFlushesShortAndAnsiDataOnly()
+    {
+        Assert.False(SerialPortTransport.IsInteractiveSerialPayload([]));
+        Assert.True(SerialPortTransport.IsInteractiveSerialPayload([0x1B, 0x5B, 0x30, 0x6E]));
+        Assert.True(SerialPortTransport.IsInteractiveSerialPayload(new byte[64]));
+        Assert.False(SerialPortTransport.IsInteractiveSerialPayload(new byte[65]));
+        Assert.True(SerialPortTransport.IsInteractiveSerialPayload([0x1B, ..new byte[128]]));
+    }
+
+    [Fact]
     public void HeartbeatPayloadRejectsMalformedContent()
     {
         Assert.False(SerialPortTransport.TryParseWorkerHeartbeat(Encoding.UTF8.GetBytes("garbage"), out _));

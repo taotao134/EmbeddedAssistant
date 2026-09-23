@@ -61,6 +61,10 @@ public sealed class CommunicationSession : IAsyncDisposable
     public long DisplayDropCount => Interlocked.Read(ref _displayDropCount);
     public long CaptureDropCount => Interlocked.Read(ref _captureDropCount) + _captureStore.DroppedPacketCount;
     public bool IsCapturing => Volatile.Read(ref _captureStarted);
+    /// <summary>
+    /// 在接收数据写入显示队列前执行的异步处理器。
+    /// </summary>
+    public Func<TransportPacket, CancellationToken, ValueTask>? ReceivePacketHandler { get; set; }
     public event EventHandler<Exception>? Faulted;
 
     public async Task ConnectAsync(
@@ -314,11 +318,27 @@ public sealed class CommunicationSession : IAsyncDisposable
         }
     }
 
-    public async ValueTask SendAsync(
+    public ValueTask SendAsync(
         ReadOnlyMemory<byte> data,
         string? target = null,
         CancellationToken cancellationToken = default,
-        bool? sentAsHex = null)
+        bool? sentAsHex = null) => SendCoreAsync(data, target, cancellationToken, sentAsHex, publish: true);
+
+    /// <summary>
+    /// 发送协议控制数据，但不把它发布为普通终端发送记录。
+    /// </summary>
+    public ValueTask SendControlAsync(
+        ReadOnlyMemory<byte> data,
+        string? target = null,
+        CancellationToken cancellationToken = default,
+        bool? sentAsHex = null) => SendCoreAsync(data, target, cancellationToken, sentAsHex, publish: false);
+
+    private async ValueTask SendCoreAsync(
+        ReadOnlyMemory<byte> data,
+        string? target,
+        CancellationToken cancellationToken,
+        bool? sentAsHex,
+        bool publish)
     {
         if (data.IsEmpty)
         {
@@ -339,7 +359,11 @@ public sealed class CommunicationSession : IAsyncDisposable
                 target ?? _transport.DisplayName,
                 SentAsHex: sentAsHex,
                 ArrivalTimestamp: Stopwatch.GetTimestamp());
-            await RecordAndPublishAsync(packet, linkedSource.Token).ConfigureAwait(false);
+            await RecordAsync(packet, linkedSource.Token).ConfigureAwait(false);
+            if (publish)
+            {
+                Publish(packet);
+            }
         }
         finally
         {
@@ -431,7 +455,14 @@ public sealed class CommunicationSession : IAsyncDisposable
         {
             await foreach (TransportPacket packet in _transport.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
-                await RecordAndPublishAsync(packet, cancellationToken).ConfigureAwait(false);
+                await RecordAsync(packet, cancellationToken).ConfigureAwait(false);
+                if (packet.Direction == PacketDirection.Receive
+                    && ReceivePacketHandler is { } receivePacketHandler)
+                {
+                    await receivePacketHandler(packet, cancellationToken).ConfigureAwait(false);
+                }
+
+                Publish(packet);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -444,7 +475,7 @@ public sealed class CommunicationSession : IAsyncDisposable
         }
     }
 
-    private async ValueTask RecordAndPublishAsync(TransportPacket packet, CancellationToken cancellationToken)
+    private async ValueTask RecordAsync(TransportPacket packet, CancellationToken cancellationToken)
     {
         await _captureLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -458,7 +489,6 @@ public sealed class CommunicationSession : IAsyncDisposable
         {
             _captureLock.Release();
         }
-        Publish(packet);
     }
 
     private async Task StartInitialCaptureAsync(

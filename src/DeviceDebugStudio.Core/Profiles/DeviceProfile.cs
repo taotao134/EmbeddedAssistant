@@ -10,7 +10,8 @@ public enum WorkspaceMode
     Bluetooth,
     Modbus,
     Tftp,
-    PowerShell
+    PowerShell,
+    JLink
 }
 
 public enum QuickCommandCategory
@@ -34,6 +35,7 @@ public sealed record DeviceProfile
     public TransportSettings Transport { get; init; } = new SerialTransportSettings();
     public TerminalPreferences Terminal { get; init; } = new();
     public TftpPreferences Tftp { get; init; } = new();
+    public JLinkPreferences JLink { get; init; } = new();
     public List<QuickCommandGroup> CommandGroups { get; init; } = [];
     public FrameTemplate FrameTemplate { get; init; } = new();
     public List<FrameTemplate> FrameTemplates { get; init; } = [];
@@ -49,6 +51,29 @@ public sealed record TftpPreferences
     public string LocalFile { get; init; } = string.Empty;
     public string RemoteFile { get; init; } = string.Empty;
     public int BlockSize { get; init; } = 512;
+}
+
+public sealed record JLinkPreferences
+{
+    public string ExecutablePath { get; init; } = string.Empty;
+    public string Device { get; init; } = "STM32F103C8";
+    public bool AutoDetectTarget { get; init; } = true;
+    public string InterfaceName { get; init; } = "SWD";
+    public int SpeedKHz { get; init; } = 4000;
+    public string FirmwareFile { get; init; } = string.Empty;
+    public uint FlashAddress { get; init; } = 0x0800_0000;
+    public bool EraseBeforeProgramming { get; init; } = true;
+    public List<JLinkEraseRangePreference>? EraseRanges { get; init; }
+    public bool Verify { get; init; } = true;
+    public bool ResetAfterProgramming { get; init; } = true;
+    public bool RunAfterProgramming { get; init; } = true;
+}
+
+public sealed record JLinkEraseRangePreference
+{
+    public uint StartAddress { get; init; }
+    public uint EndAddressExclusive { get; init; }
+    public bool Selected { get; init; } = true;
 }
 
 public sealed record TerminalPreferences
