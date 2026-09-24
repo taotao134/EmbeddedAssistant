@@ -869,6 +869,15 @@ public partial class MainWindow : FluentWindow
         }
 
         e.Handled = true;
+
+        // 回车、制表这类控制字符已由 OnAnsiTerminalPreviewKeyDown 转成终端按键序列发过一次，
+        // 这里再发一遍就是两个行结束符：设备 REPL 会多执行一条空命令，于是每发一次多打一个提示符。
+        // 文本输入只负责可打印字符，控制键统一归 PreviewKeyDown 管。
+        if (e.Text.Any(char.IsControl))
+        {
+            return;
+        }
+
         await _viewModel.SendAnsiTerminalTextAsync(e.Text);
     }
 
@@ -1038,7 +1047,7 @@ public partial class MainWindow : FluentWindow
             AnsiTerminalCell style = cells[start];
             int end = start + 1;
             while (end < cells.Count
-                && cells[end].Equals(style)
+                && HasSameAnsiStyle(cells[end], style)
                 && !(snapshot.CursorVisible
                     && snapshot.CursorRow == rowIndex
                     && snapshot.CursorColumn == end))
@@ -1061,6 +1070,23 @@ public partial class MainWindow : FluentWindow
             start = end;
         }
     }
+
+    /// <summary>
+    /// 判断两个单元格能否并入同一个 Run
+    /// </summary>
+    /// <param name="left">左侧单元格</param>
+    /// <param name="right">右侧单元格</param>
+    /// <returns>样式一致返回真，否则返回假</returns>
+    /// <remarks>
+    /// 只比样式、不比字符。这里原先用 AnsiTerminalCell.Equals 合并相邻单元格，而它是 record struct，
+    /// Equals 会连 Character 一起比较，相邻字符几乎必然不同，于是退化成“一字一个 Run”：
+    /// 2000 行 × 160 列最多几十万个 Run，Ctrl+A 全选时 WPF 要逐个 Run 生成选区高亮，界面直接卡死。
+    /// </remarks>
+    private static bool HasSameAnsiStyle(AnsiTerminalCell left, AnsiTerminalCell right) =>
+        left.Foreground == right.Foreground
+        && left.Background == right.Background
+        && left.Bold == right.Bold
+        && left.Inverse == right.Inverse;
 
     private static void ApplyAnsiRunStyle(
         Run run,
@@ -2115,31 +2141,6 @@ public partial class MainWindow : FluentWindow
         e.Handled = true;
     }
 
-    private void OnQuickRepeatIntervalPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
-        MoveIntervalCaretToEnd(sender);
-
-    private void OnQuickParameterRepeatIntervalPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
-        MoveIntervalCaretToEnd(sender);
-
-    private static void MoveIntervalCaretToEnd(object sender)
-    {
-        if (sender is not TextBox textBox)
-        {
-            return;
-        }
-
-        textBox.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
-        {
-            if (!textBox.IsKeyboardFocusWithin)
-            {
-                return;
-            }
-
-            textBox.CaretIndex = textBox.Text.Length;
-            textBox.SelectionLength = 0;
-        }));
-    }
-
     private void OnQuickVariablePreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not TextBox textBox)
@@ -2153,19 +2154,6 @@ public partial class MainWindow : FluentWindow
             textBox.SelectAll();
             e.Handled = true;
         }
-    }
-
-    private void OnQuickCommandNamePreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is not TextBox textBox || textBox.IsKeyboardFocusWithin)
-        {
-            return;
-        }
-
-        textBox.Focus();
-        textBox.CaretIndex = textBox.Text.Length;
-        textBox.SelectionLength = 0;
-        e.Handled = true;
     }
 
     private void OnQuickVariableSetPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)

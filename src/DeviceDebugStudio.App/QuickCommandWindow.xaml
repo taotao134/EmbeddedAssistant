@@ -437,7 +437,6 @@
                          TextAlignment="Center"
                          MaxLength="5"
                          Text="{Binding RepeatIntervalText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                         PreviewMouseLeftButtonDown="OnRepeatIntervalPreviewMouseLeftButtonDown"
                          LostKeyboardFocus="OnRepeatIntervalLostKeyboardFocus"
                          ToolTip="指令循环发送间隔，范围 10~60000 ms" />
                 <TextBlock Grid.Column="5"
@@ -749,7 +748,6 @@
                          TextAlignment="Center"
                          MaxLength="5"
                          Text="{Binding ParameterRepeatIntervalText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                         PreviewMouseLeftButtonDown="OnParameterRepeatIntervalPreviewMouseLeftButtonDown"
                          LostKeyboardFocus="OnParameterRepeatIntervalLostKeyboardFocus"
                          ToolTip="循环发送间隔，范围 10~60000 ms" />
                 <TextBlock Grid.Column="5"

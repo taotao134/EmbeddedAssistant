@@ -3845,6 +3845,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         try
         {
             IReadOnlyList<SerialPortInfo> ports = await Task.Run(SerialPortDiscovery.GetPorts).ConfigureAwait(true);
+            // 枚举偶发会返回空（WMI/注册表抖动），此时不能拿空列表覆盖已有端口，
+            // 否则下拉项被清光、串口名称直接消失。真要清空请用“刷新串口”手动触发。
+            if (ports.Count == 0 && SerialPorts.Count > 0)
+            {
+                return;
+            }
+
             if (!ports.Select(item => item.PortName).SequenceEqual(SerialPorts.Select(item => item.PortName), StringComparer.OrdinalIgnoreCase))
             {
                 ApplyPortList(ports);
@@ -3881,6 +3888,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             SerialPorts.Add(port);
         }
         PortName = selected;
+        // Clear/Add 会把 ComboBox 的 SelectedValue 清掉并回写 PortName；若 selected 与回写后的值相同，
+        // SetProperty 视为无变化不再发通知，绑定就不会把选中项同步回下拉框，串口框会一直空着（标题栏却还显示端口名）。
+        // 这里显式补一次通知，只影响绑定同步，不会再触发 OnPortNameChanged 的副作用。
+        OnPropertyChanged(nameof(PortName));
         OnPropertyChanged(nameof(ConnectionSummary));
     }
 

@@ -729,7 +729,7 @@
                                     </TextBlock>
                                     <TextBox Height="24"
                                              Style="{StaticResource ConnectionTextBoxStyle}"
-                                             Text="{Binding RemotePort, UpdateSourceTrigger=PropertyChanged}"
+                                             Text="{Binding RemotePort}"
                                              ToolTip="TCP 服务器或 UDP 目标的端口号" />
                                 </StackPanel>
                             </StackPanel>
@@ -781,7 +781,7 @@
                                     </TextBlock>
                                     <TextBox Height="24"
                                              Style="{StaticResource ConnectionTextBoxStyle}"
-                                             Text="{Binding LocalPort, UpdateSourceTrigger=PropertyChanged}"
+                                             Text="{Binding LocalPort}"
                                              ToolTip="本机绑定或监听的端口号" />
                                 </StackPanel>
                             </StackPanel>
@@ -1323,7 +1323,7 @@
                                                  Style="{StaticResource ConnectionTextBoxStyle}"
                                                  FontSize="10"
                                                  HorizontalContentAlignment="Center"
-                                                 Text="{Binding SendRepeatIntervalMs, UpdateSourceTrigger=PropertyChanged}"
+                                                 Text="{Binding SendRepeatIntervalMs}"
                                                  ToolTip="循环发送间隔，单位 ms" />
                                         <TextBlock Margin="0,0,7,3"
                                                    VerticalAlignment="Center"
@@ -1353,7 +1353,7 @@
                                                      Style="{StaticResource ConnectionTextBoxStyle}"
                                                      FontSize="10"
                                                      HorizontalContentAlignment="Center"
-                                                     Text="{Binding ReceiveTimeoutMs, UpdateSourceTrigger=PropertyChanged}"
+                                                     Text="{Binding ReceiveTimeoutMs}"
                                                      ToolTip="仅串口有效；不同底层读取在此间隔内合并为一条记录" />
                                             <TextBlock Margin="2,0,0,0"
                                                        VerticalAlignment="Center"
@@ -1762,7 +1762,7 @@
                             <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,3,6,5" VerticalAlignment="Center" Text="服务器" />
                             <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,8,5" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding TftpClient.Host, UpdateSourceTrigger=PropertyChanged}" ToolTip="TFTP 服务器的 IPv4 地址或主机名" />
                             <TextBlock Grid.Row="0" Grid.Column="2" Margin="0,3,6,5" VerticalAlignment="Center" Text="端口" />
-                            <TextBox Grid.Row="0" Grid.Column="3" Margin="0,0,0,5" HorizontalContentAlignment="Center" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding TftpClient.Port, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBox Grid.Row="0" Grid.Column="3" Margin="0,0,0,5" HorizontalContentAlignment="Center" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding TftpClient.Port}" />
 
                             <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,3,6,5" VerticalAlignment="Center" Text="本地文件" />
                             <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,8,5" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding TftpClient.LocalFile, UpdateSourceTrigger=PropertyChanged}" ToolTip="上传时读取、下载时写入的本地路径" />
@@ -1901,7 +1901,7 @@
                             <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,0,8,6">
                                 <ComboBox Width="120" Style="{StaticResource ConnectionComboBoxStyle}" ItemsSource="{Binding JLink.Interfaces}" SelectedItem="{Binding JLink.InterfaceName}" />
                                 <TextBlock Margin="18,3,6,0" VerticalAlignment="Center" Text="速度" />
-                                <TextBox Width="60" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding JLink.SpeedKHz, UpdateSourceTrigger=PropertyChanged}" ToolTip="J-Link 时钟，单位 kHz" />
+                                <TextBox Width="60" Style="{StaticResource CompactTextBoxStyle}" Text="{Binding JLink.SpeedKHz}" ToolTip="J-Link 时钟，单位 kHz" />
                                 <ui:ToggleSwitch Margin="18,0,0,0" Content="连接后自动读取" IsChecked="{Binding JLink.AutoDetectTarget}" />
                             </StackPanel>
                             <StackPanel Grid.Row="2" Grid.Column="2" Margin="0,0,0,6">
@@ -2416,7 +2416,6 @@
                                                      FontWeight="Normal"
                                                      VerticalContentAlignment="Center"
                                                      Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
-                                                     PreviewMouseLeftButtonDown="OnQuickCommandNamePreviewMouseLeftButtonDown"
                                                      ToolTip="快捷命令名称" />
                                             <Thumb Grid.Column="2"
                                                    Width="8"
@@ -2577,7 +2576,6 @@
                                                              MaxLength="5"
                                                              Validation.ErrorTemplate="{x:Null}"
                                                              Text="{Binding RepeatIntervalText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                             PreviewMouseLeftButtonDown="OnQuickRepeatIntervalPreviewMouseLeftButtonDown"
                                                              LostKeyboardFocus="OnQuickCommandRepeatIntervalLostKeyboardFocus"
                                                              ToolTip="快捷指令循环发送间隔，范围 10~60000 ms" />
                                                     <TextBlock Margin="4,0,6,0"
@@ -3139,7 +3137,6 @@
                                                      MaxLength="5"
                                                      Validation.ErrorTemplate="{x:Null}"
                                                      Text="{Binding ParameterRepeatIntervalText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                     PreviewMouseLeftButtonDown="OnQuickParameterRepeatIntervalPreviewMouseLeftButtonDown"
                                                      LostKeyboardFocus="OnQuickParameterRepeatIntervalLostKeyboardFocus"
                                                      ToolTip="快捷参数循环发送间隔，范围 10~60000 ms" />
                                             <TextBlock Grid.Column="5"
@@ -3265,7 +3262,7 @@
                             <TextBox Grid.Column="3"
                                      HorizontalContentAlignment="Center"
                                      Style="{StaticResource CompactTextBoxStyle}"
-                                     Text="{Binding TftpClient.Port, UpdateSourceTrigger=PropertyChanged}" />
+                                     Text="{Binding TftpClient.Port}" />
                         </Grid>
 
                         <Grid Grid.Row="4" Margin="0,0,0,6">

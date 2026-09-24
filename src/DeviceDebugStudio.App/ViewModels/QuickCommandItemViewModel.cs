@@ -358,6 +358,13 @@ public partial class QuickCommandItemViewModel : ObservableObject
             return;
         }
 
+        // 文本已能解析成同一数值时保持原样（如 010、+10），否则绑定回写会整段替换文本并把光标打回最左；
+        // 统一格式化交给失焦时的 CommitRepeatIntervalText。
+        if (TryParseInterval(repeatIntervalText, out int current) && current == normalized)
+        {
+            return;
+        }
+
         string text = FormatInterval(normalized);
         if (!string.Equals(repeatIntervalText, text, StringComparison.Ordinal))
         {
@@ -380,6 +387,13 @@ public partial class QuickCommandItemViewModel : ObservableObject
         if (value != normalized)
         {
             ParameterRepeatIntervalMs = normalized;
+            return;
+        }
+
+        // 文本已能解析成同一数值时保持原样（如 010、+10），否则绑定回写会整段替换文本并把光标打回最左；
+        // 统一格式化交给失焦时的 CommitRepeatIntervalText。
+        if (TryParseInterval(parameterRepeatIntervalText, out int current) && current == normalized)
+        {
             return;
         }
 

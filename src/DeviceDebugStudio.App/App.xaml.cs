@@ -53,6 +53,8 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         Stopwatch startupStopwatch = Stopwatch.StartNew();
+        // 必须在创建任何窗口前注册，保证所有输入框（含模板内虚拟化列表里的）首击都定位到文本末尾。
+        TextBoxCaretBehavior.Register();
         base.OnStartup(e);
         if (!TryAcquireApplicationMutex(out Mutex? instanceMutex))
         {

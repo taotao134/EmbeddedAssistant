@@ -677,12 +677,6 @@ public partial class QuickCommandWindow : FluentWindow
         e.Handled = true;
     }
 
-    private void OnParameterRepeatIntervalPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
-        MoveCaretToEnd(sender);
-
-    private void OnRepeatIntervalPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
-        MoveCaretToEnd(sender);
-
     private void OnRepeatIntervalLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
         if (sender is TextBox { DataContext: QuickCommandItemViewModel command })
@@ -744,23 +738,6 @@ public partial class QuickCommandWindow : FluentWindow
         {
             _viewModel.StatusText = $"AI导入提示词生成失败：{exception.Message}";
         }
-    }
-
-    private static void MoveCaretToEnd(object sender)
-    {
-        if (sender is not TextBox textBox)
-        {
-            return;
-        }
-
-        textBox.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
-        {
-            if (textBox.IsKeyboardFocusWithin)
-            {
-                textBox.CaretIndex = textBox.Text.Length;
-                textBox.SelectionLength = 0;
-            }
-        }));
     }
 
     private static ScrollViewer? FindScrollViewer(DependencyObject element)

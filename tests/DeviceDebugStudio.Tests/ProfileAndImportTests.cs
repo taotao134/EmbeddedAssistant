@@ -631,7 +631,7 @@ public sealed class ProfileAndImportTests
             ["C02"] = 89,
             ["E90新模块"] = 6,
             ["ESP32lyrat"] = 34,
-            ["ka变频器"] = 32,
+            ["ka变频器"] = 45,
             ["ka地球站_ACU"] = 55,
             ["ka地球站_ADU"] = 86,
             ["LRIT"] = 36,
