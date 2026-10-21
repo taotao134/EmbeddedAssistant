@@ -116,17 +116,4 @@ public partial class DeviceWorkspaceWindow : FluentWindow
         }
     }
 
-    private async void OnConfigureProfileDirectoryClick(object sender, RoutedEventArgs e)
-    {
-        OpenFolderDialog dialog = new()
-        {
-            Title = "选择设备配置保存目录",
-            InitialDirectory = _viewModel.ProfileDirectory,
-            Multiselect = false
-        };
-        if (dialog.ShowDialog(this) == true)
-        {
-            await _viewModel.ConfigureProfileDirectoryAsync(dialog.FolderName);
-        }
-    }
 }

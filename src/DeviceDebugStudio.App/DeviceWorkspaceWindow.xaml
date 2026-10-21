@@ -139,8 +139,6 @@
                             <MenuItem Header="导出当前设备 JSON" Click="OnExportDeviceProfileClick" />
                             <Separator />
                             <MenuItem Header="打开捕获数据库" Click="OnOpenCaptureClick" />
-                            <Separator />
-                            <MenuItem Header="选择配置保存目录" Click="OnConfigureProfileDirectoryClick" />
                         </ContextMenu>
                     </Button.ContextMenu>
                     <StackPanel Orientation="Horizontal">

@@ -10,6 +10,33 @@ namespace DeviceDebugStudio.Tests;
 public sealed class QuickCommandInteractionTests
 {
     [Fact]
+    public void EmptyTemplateUsesDirectPayloadForSchemePreview()
+    {
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Payload = "ads"
+        });
+
+        Assert.Equal("ads", command.ResolvedPayload);
+
+        command.Payload = "status";
+
+        Assert.Equal("status", command.ResolvedPayload);
+    }
+
+    [Fact]
+    public void FixedTemplateTakesPrecedenceOverDirectPayload()
+    {
+        QuickCommandItemViewModel command = new(new QuickCommand
+        {
+            Payload = "ads",
+            Template = "fixed-command"
+        });
+
+        Assert.Equal("fixed-command", command.ResolvedPayload);
+    }
+
+    [Fact]
     public async Task AddQuickCommandClearsSearchAndSelectsNewCommand()
     {
         string directory = CreateTemporaryDirectory();

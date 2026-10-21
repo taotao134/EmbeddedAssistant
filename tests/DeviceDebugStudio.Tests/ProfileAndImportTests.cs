@@ -11,6 +11,13 @@ namespace DeviceDebugStudio.Tests;
 public sealed class ProfileAndImportTests
 {
     [Fact]
+    public void ProfilesDirectoryIsUnderSoftwareDirectory()
+    {
+        Assert.Equal(Path.GetFullPath(AppContext.BaseDirectory), AppPaths.SoftwareDirectory);
+        Assert.Equal(Path.Combine(AppPaths.SoftwareDirectory, "Profiles"), AppPaths.ProfilesDirectory);
+    }
+
+    [Fact]
     public void TerminalPreferencesDefaultToCrLfLineEnding()
     {
         Assert.Equal("CRLF", new TerminalPreferences().LineEnding);
@@ -579,6 +586,30 @@ public sealed class ProfileAndImportTests
             Assert.False(File.Exists(firstPath));
             Assert.Single(Directory.EnumerateFiles(directory, "*.json"));
             Assert.Equal("改名后的设备", Assert.Single(await store.LoadAllAsync()).Name);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task ProfileStoreIgnoresUnrelatedJsonFiles()
+    {
+        string directory = CreateTemporaryDirectory();
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, "settings.json"),
+                "{\"ProfileDirectory\":\"D:\\\\project\\\\settings\",\"TerminalFontSize\":14}");
+            JsonDeviceProfileStore store = new(directory);
+            DeviceProfile profile = new() { Name = "设备配置" };
+            await store.SaveAsync(profile);
+
+            IReadOnlyList<DeviceProfile> loaded = await store.LoadAllAsync();
+
+            Assert.Equal(profile.Id, Assert.Single(loaded).Id);
+            Assert.True(File.Exists(Path.Combine(directory, "settings.json")));
         }
         finally
         {

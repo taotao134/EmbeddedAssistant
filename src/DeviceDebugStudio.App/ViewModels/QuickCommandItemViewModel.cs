@@ -21,11 +21,7 @@ public partial class QuickCommandItemViewModel : ObservableObject
         name = command.Name;
         string initialPayload = ByteText.NormalizeSscomCommandText(command.Payload);
         string initialTemplate = ByteText.NormalizeSscomCommandText(command.Template);
-        if (string.IsNullOrEmpty(initialTemplate))
-        {
-            initialTemplate = initialPayload;
-        }
-        else if (string.IsNullOrEmpty(initialPayload))
+        if (string.IsNullOrEmpty(initialPayload) && !string.IsNullOrEmpty(initialTemplate))
         {
             initialPayload = initialTemplate;
         }
@@ -152,7 +148,9 @@ public partial class QuickCommandItemViewModel : ObservableObject
     public string UsageText => UsageCount == 0 ? "未使用" : $"使用 {UsageCount} 次";
     public string UsageShortText => UsageCount > 999 ? "999+" : UsageCount.ToString();
     public string VariableSetCountText => $"{VariableSets.Count} 套方案";
-    public string ResolvedPayload => ByteText.ExpandVariables(Template, SelectedVariableSet?.GetValues() ?? EmptyVariables);
+    public string ResolvedPayload => string.IsNullOrWhiteSpace(Template)
+        ? Payload
+        : ByteText.ExpandVariables(Template, SelectedVariableSet?.GetValues() ?? EmptyVariables);
     public bool HasTemplateVariables => GetTemplateVariableNames().Count > 0;
     public bool IsDirectPayloadMode => !HasTemplateVariables;
     public bool HasSelectedVariables => SelectedVariableSet?.Variables.Count > 0;
@@ -326,6 +324,8 @@ public partial class QuickCommandItemViewModel : ObservableObject
             value = normalized;
             OnPropertyChanged(nameof(Payload));
         }
+
+        OnPropertyChanged(nameof(ResolvedPayload));
     }
 
     partial void OnTemplateChanged(string value)

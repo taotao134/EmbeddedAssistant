@@ -37,27 +37,72 @@ if (-not $resolvedPublish.StartsWith($resolvedRoot, [StringComparison]::OrdinalI
     throw 'The publish directory is outside ReleasePackages.'
 }
 
-if (Test-Path -LiteralPath $publishDir) {
-    Remove-Item -LiteralPath $publishDir -Recurse -Force
-}
-New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
+$profilesBackup = Join-Path ([IO.Path]::GetTempPath()) ('DeviceDebugStudio-Profiles-' + [Guid]::NewGuid().ToString('N'))
+$profilesPath = Join-Path $publishDir 'Profiles'
+$profilesBackedUp = $false
 
-& $dotnet publish $project -c Release -r win-x64 --self-contained true -o $publishDir /p:PublishSingleFile=false /p:PublishTrimmed=false
-if ($LASTEXITCODE -ne 0) {
-    throw 'dotnet publish failed.'
-}
+try {
+    if (Test-Path -LiteralPath $profilesPath) {
+        Move-Item -LiteralPath $profilesPath -Destination $profilesBackup
+        $profilesBackedUp = $true
+    }
 
-$publishedExe = Join-Path $publishDir 'DeviceDebugStudio.exe'
-if (-not (Test-Path -LiteralPath $publishedExe)) {
-    throw 'The published executable was not generated.'
-}
+    if (Test-Path -LiteralPath $publishDir) {
+        Remove-Item -LiteralPath $publishDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
 
-if (Test-Path -LiteralPath $zipPath) {
-    Remove-Item -LiteralPath $zipPath -Force
+    & $dotnet publish $project -c Release -r win-x64 --self-contained true -o $publishDir /p:PublishSingleFile=false /p:PublishTrimmed=false
+    if ($LASTEXITCODE -ne 0) {
+        throw 'dotnet publish failed.'
+    }
+
+    $publishedExe = Join-Path $publishDir 'DeviceDebugStudio.exe'
+    if (-not (Test-Path -LiteralPath $publishedExe)) {
+        throw 'The published executable was not generated.'
+    }
+
+    if ($profilesBackedUp) {
+        Move-Item -LiteralPath $profilesBackup -Destination $profilesPath
+        $profilesBackedUp = $false
+    }
+
+    $zipStaging = Join-Path ([IO.Path]::GetTempPath()) ('DeviceDebugStudio-Package-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Path $zipStaging -Force | Out-Null
+        Get-ChildItem -LiteralPath $publishDir -Force |
+            Where-Object { $_.Name -ne 'Profiles' } |
+            Copy-Item -Destination $zipStaging -Recurse -Force
+
+        if (Test-Path -LiteralPath $zipPath) {
+            Remove-Item -LiteralPath $zipPath -Force
+        }
+        Compress-Archive -Path (Join-Path $zipStaging '*') -DestinationPath $zipPath -CompressionLevel Optimal
+    }
+    finally {
+        if (Test-Path -LiteralPath $zipStaging) {
+            Remove-Item -LiteralPath $zipStaging -Recurse -Force
+        }
+    }
+
+    $checksum = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath $checksumPath -Value $checksum -Encoding ascii
 }
-Compress-Archive -Path (Join-Path $publishDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
-$checksum = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -LiteralPath $checksumPath -Value $checksum -Encoding ascii
+catch {
+    if ($profilesBackedUp -and (Test-Path -LiteralPath $profilesBackup)) {
+        if (Test-Path -LiteralPath $profilesPath) {
+            Remove-Item -LiteralPath $profilesPath -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
+        Move-Item -LiteralPath $profilesBackup -Destination $profilesPath
+    }
+    throw
+}
+finally {
+    if (Test-Path -LiteralPath $profilesBackup) {
+        Remove-Item -LiteralPath $profilesBackup -Recurse -Force
+    }
+}
 
 Write-Host "Publish directory: $publishDir"
 Write-Host "Package: $zipPath"

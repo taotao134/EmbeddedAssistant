@@ -71,7 +71,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly Dictionary<Guid, CancellationTokenSource> _repeatCommands = [];
     private readonly Dictionary<Guid, CancellationTokenSource> _parameterRepeatCommands = [];
     private readonly Dictionary<QuickCommandCategory, List<QuickCommandItemViewModel>> _quickCommandsByCategory = [];
-    private readonly ConcurrentDictionary<Guid, string> _importedProfileSourcePaths = new();
     private readonly ConcurrentDictionary<Guid, byte> _deletedProfileIds = new();
     private CancellationTokenSource? _sendRepeatCancellation;
     private readonly object _decoderSync = new();
@@ -616,32 +615,19 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public async Task InitializeAsync(AppSettings? startupSettings = null)
     {
         AppSettings settings = startupSettings ?? await _appSettingsStore.LoadAsync().ConfigureAwait(true);
-        try
+        string previousProfileDirectory = settings.ProfileDirectory;
+        _profileStore.SetDirectory(AppPaths.ProfilesDirectory);
+        if (TryNormalizeDirectory(previousProfileDirectory, out string sourceDirectory)
+            && !string.Equals(sourceDirectory, _profileStore.DirectoryPath, StringComparison.OrdinalIgnoreCase))
         {
-            _profileStore.SetDirectory(settings.ProfileDirectory);
+            await CopyProfilesAsync(sourceDirectory).ConfigureAwait(true);
         }
-        catch (Exception)
+        string legacyProfilesDirectory = Path.Combine(AppPaths.LocalDataDirectory, "Profiles");
+        if (!string.Equals(legacyProfilesDirectory, AppPaths.ProfilesDirectory, StringComparison.OrdinalIgnoreCase))
         {
-            _profileStore.SetDirectory(AppPaths.ProfilesDirectory);
+            await CopyProfilesAsync(legacyProfilesDirectory).ConfigureAwait(true);
         }
         ProfileDirectory = _profileStore.DirectoryPath;
-        _importedProfileSourcePaths.Clear();
-        foreach ((Guid profileId, string sourcePath) in settings.ImportedProfileSourcePaths)
-        {
-            if (string.IsNullOrWhiteSpace(sourcePath))
-            {
-                continue;
-            }
-
-            try
-            {
-                _importedProfileSourcePaths[profileId] = Path.GetFullPath(sourcePath);
-            }
-            catch (ArgumentException)
-            {
-                // 忽略历史设置中的无效路径，当前配置仍可保存到默认目录。
-            }
-        }
         ApplyTerminalDisplaySettings(settings);
         GitHubRepository = string.IsNullOrWhiteSpace(settings.GitHubRepository)
             ? AppSettings.DefaultGitHubRepository
@@ -857,7 +843,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 string sourcePath = Path.GetFullPath(path);
                 DeviceProfile profile = await _profileFileService.ImportAsync(sourcePath).ConfigureAwait(true);
                 await _profileStore.SaveAsync(profile).ConfigureAwait(true);
-                _importedProfileSourcePaths[profile.Id] = sourcePath;
                 count++;
             }
             await ReloadProfilesAsync().ConfigureAwait(true);
@@ -985,34 +970,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             IsBusy = false;
         }
-    }
-
-    public async Task ConfigureProfileDirectoryAsync(string directory)
-    {
-        DeviceProfile? active = CreateActiveProfileSnapshot();
-        List<DeviceProfile> profiles = Profiles.ToList();
-        if (active is not null)
-        {
-            int index = profiles.FindIndex(profile => profile.Id == active.Id);
-            if (index >= 0)
-            {
-                profiles[index] = active;
-            }
-            else
-            {
-                profiles.Add(active);
-            }
-        }
-
-        _profileStore.SetDirectory(directory);
-        foreach (DeviceProfile profile in profiles)
-        {
-            await _profileStore.SaveAsync(profile).ConfigureAwait(true);
-        }
-        await SaveAppSettingsAsync().ConfigureAwait(true);
-        ProfileDirectory = _profileStore.DirectoryPath;
-        await ReloadProfilesAsync(active?.Id).ConfigureAwait(true);
-        StatusText = $"设备配置保存位置已设为：{ProfileDirectory}";
     }
 
     public async Task SendFileAsync(string path, int chunkSize = 256, int intervalMs = 1, CancellationToken cancellationToken = default)
@@ -1251,16 +1208,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public bool CanSend => CanUseConnectedSession && !string.IsNullOrEmpty(SendText);
 
     private bool CanSendQuickCommand(QuickCommandItemViewModel? command) =>
-        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.Payload);
+        CanUseConnectedSession && command is not null && !string.IsNullOrWhiteSpace(command.Payload);
 
     private bool CanSendQuickParameterCommand(QuickCommandItemViewModel? command) =>
-        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.ResolvedPayload);
+        CanUseConnectedSession && command is not null && !string.IsNullOrWhiteSpace(command.ResolvedPayload);
 
     private bool CanToggleQuickRepeat(QuickCommandItemViewModel? command) =>
-        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.Payload);
+        CanUseConnectedSession && command is not null && !string.IsNullOrWhiteSpace(command.Payload);
 
     private bool CanToggleQuickParameterRepeat(QuickCommandItemViewModel? command) =>
-        CanUseConnectedSession && command is not null && !string.IsNullOrEmpty(command.ResolvedPayload);
+        CanUseConnectedSession && command is not null && !string.IsNullOrWhiteSpace(command.ResolvedPayload);
 
     [RelayCommand(CanExecute = nameof(CanSend))]
     private async Task SendAsync()
@@ -2077,7 +2034,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             foreach (Guid profileId in profileIds)
             {
                 await _profileStore.DeleteAsync(profileId).ConfigureAwait(true);
-                _importedProfileSourcePaths.TryRemove(profileId, out _);
             }
 
             if (_activeProfile is not null && profileIds.Contains(_activeProfile.Id))
@@ -2220,19 +2176,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         await _profileStore.SaveAsync(snapshot).ConfigureAwait(false);
-        if (_importedProfileSourcePaths.TryGetValue(snapshot.Id, out string? sourcePath))
-        {
-            try
-            {
-                await _profileFileService.ExportAsync(snapshot, sourcePath).ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                throw new InvalidOperationException(
-                    $"默认配置已保存，但导入文件覆盖失败：{sourcePath}。{exception.Message}",
-                    exception);
-            }
-        }
     }
 
     private async Task ObserveProfileSaveAsync(Task saveTask)
@@ -4237,6 +4180,52 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         return BuildCurrentProfile(_activeProfile.Id, name);
     }
 
+    private async Task CopyProfilesAsync(string sourceDirectory)
+    {
+        if (!Directory.Exists(sourceDirectory))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(AppPaths.ProfilesDirectory);
+        foreach (string sourcePath in Directory.EnumerateFiles(sourceDirectory, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            string destinationPath = Path.Combine(AppPaths.ProfilesDirectory, Path.GetFileName(sourcePath));
+            if (File.Exists(destinationPath))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Copy(sourcePath, destinationPath);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                Log.Warning(exception, "旧设备配置迁移失败 | 文件={Path}", sourcePath);
+            }
+        }
+    }
+
+    private static bool TryNormalizeDirectory(string? directory, out string resolvedDirectory)
+    {
+        resolvedDirectory = string.Empty;
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return false;
+        }
+
+        try
+        {
+            resolvedDirectory = Path.GetFullPath(directory);
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
     private async Task SaveActiveProfileSnapshotAsync(bool showStatus)
     {
         DeviceProfile? snapshot = CreateActiveProfileSnapshot();
@@ -4245,9 +4234,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        string? importedSourcePath = _importedProfileSourcePaths.TryGetValue(snapshot.Id, out string? sourcePath)
-            ? sourcePath
-            : null;
         try
         {
             await QueueProfileSave(snapshot).ConfigureAwait(true);
@@ -4282,9 +4268,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (showStatus)
         {
-            StatusText = importedSourcePath is null
-                ? $"设备配置已保存：{_profileStore.DirectoryPath}"
-                : $"设备配置已保存，并覆盖导入文件：{importedSourcePath}";
+            StatusText = $"设备配置已保存：{_profileStore.DirectoryPath}";
         }
     }
 
@@ -4748,9 +4732,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             {
                 ProfileDirectory = _profileStore.DirectoryPath,
                 SelectedProfileId = SelectedProfile?.Id,
-                ImportedProfileSourcePaths = _importedProfileSourcePaths.ToDictionary(
-                    item => item.Key,
-                    item => item.Value),
+                ImportedProfileSourcePaths = [],
                 TerminalFontSize = TerminalFontSize,
                 TerminalTimeColumnWidth = TerminalTimeColumnWidth,
                 TerminalDirectionColumnWidth = TerminalDirectionColumnWidth,

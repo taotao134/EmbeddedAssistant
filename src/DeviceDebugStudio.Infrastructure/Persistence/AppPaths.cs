@@ -2,11 +2,13 @@ namespace DeviceDebugStudio.Infrastructure.Persistence;
 
 public static class AppPaths
 {
+    public static string SoftwareDirectory { get; } = Path.GetFullPath(AppContext.BaseDirectory);
+
     public static string LocalDataDirectory { get; } = EnsureDirectory(Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DeviceDebugStudio"));
 
-    public static string ProfilesDirectory { get; } = EnsureDirectory(Path.Combine(LocalDataDirectory, "Profiles"));
+    public static string ProfilesDirectory { get; } = EnsureDirectory(Path.Combine(SoftwareDirectory, "Profiles"));
 
     public static string DiagnosticsDirectory { get; } = EnsureDirectory(Path.Combine(LocalDataDirectory, "Logs"));
 

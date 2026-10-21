@@ -2855,20 +2855,6 @@ public partial class MainWindow : FluentWindow
         e.Handled = true;
     }
 
-    private async void OnConfigureProfileDirectoryClick(object sender, RoutedEventArgs e)
-    {
-        OpenFolderDialog dialog = new()
-        {
-            Title = "选择设备配置保存目录",
-            InitialDirectory = _viewModel.ProfileDirectory,
-            Multiselect = false
-        };
-        if (dialog.ShowDialog(this) == true)
-        {
-            await _viewModel.ConfigureProfileDirectoryAsync(dialog.FolderName);
-        }
-    }
-
     private async void OnDeleteProfileClick(object sender, RoutedEventArgs e)
     {
         if (_viewModel.SelectedProfile is null)

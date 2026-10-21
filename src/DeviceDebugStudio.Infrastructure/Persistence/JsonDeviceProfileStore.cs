@@ -45,9 +45,8 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
             {
                 try
                 {
-                    await using FileStream stream = File.OpenRead(file);
-                    DeviceProfile? profile = await JsonSerializer.DeserializeAsync<DeviceProfile>(stream, _options, cancellationToken).ConfigureAwait(false);
-                    if (profile is not null && profile.SchemaVersion <= DeviceProfile.CurrentSchemaVersion)
+                    DeviceProfile? profile = await TryReadProfileAsync(file, cancellationToken).ConfigureAwait(false);
+                    if (profile is not null)
                     {
                         profileFiles.Add((profile, file));
                     }
@@ -76,6 +75,29 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
             _gate.Release();
         }
     }
+
+    private async Task<DeviceProfile?> TryReadProfileAsync(string path, CancellationToken cancellationToken)
+    {
+        await using FileStream stream = File.OpenRead(path);
+        using JsonDocument document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        JsonElement root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object
+            || !HasProperty(root, "Id")
+            || !HasProperty(root, "Name")
+            || !HasProperty(root, "Transport")
+            || !HasProperty(root, "CommandGroups"))
+        {
+            return null;
+        }
+
+        DeviceProfile? profile = JsonSerializer.Deserialize<DeviceProfile>(root.GetRawText(), _options);
+        return profile is not null && profile.SchemaVersion <= DeviceProfile.CurrentSchemaVersion
+            ? profile
+            : null;
+    }
+
+    private static bool HasProperty(JsonElement element, string name) =>
+        element.EnumerateObject().Any(property => string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase));
 
     public async Task SaveAsync(DeviceProfile profile, CancellationToken cancellationToken = default)
     {
