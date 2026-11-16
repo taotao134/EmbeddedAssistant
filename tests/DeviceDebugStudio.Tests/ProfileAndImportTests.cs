@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using DeviceDebugStudio.App.ViewModels;
@@ -5,6 +6,8 @@ using DeviceDebugStudio.Core.Profiles;
 using DeviceDebugStudio.Core.Transports;
 using DeviceDebugStudio.Infrastructure.Import;
 using DeviceDebugStudio.Infrastructure.Persistence;
+using DeviceDebugStudio.Infrastructure.Transports;
+using DeviceDebugStudio.Infrastructure.Updates;
 
 namespace DeviceDebugStudio.Tests;
 
@@ -690,6 +693,239 @@ public sealed class ProfileAndImportTests
         foreach ((string path, DateTime timestamp) in sourceTimes)
         {
             Assert.Equal(timestamp, File.GetLastWriteTimeUtc(path));
+        }
+    }
+
+    /// <summary>
+    /// @brief 验证配置存储与导入服务对空字符串可空 GUID 及时间戳的兼容解析
+    /// </summary>
+    [Fact]
+    public async Task ProfileStoreAndImportTolerateEmptyNullableGuidAndDateTimeOffset()
+    {
+        string directory = CreateTemporaryDirectory();
+        try
+        {
+            string filePath = Path.Combine(directory, "容错设备.json");
+            string json = """
+                {
+                  "SchemaVersion": 1,
+                  "Id": "7bdb85f2-790a-4f9b-8447-e3048a0f6271",
+                  "Name": "容错设备",
+                  "WorkspaceMode": "Serial",
+                  "Transport": {
+                    "$type": "serial",
+                    "PortName": "COM1",
+                    "BaudRate": 115200,
+                    "Kind": "Serial"
+                  },
+                  "CommandGroups": [
+                    {
+                      "Name": "串口指令",
+                      "Category": "Serial",
+                      "Commands": [
+                        {
+                          "Name": "空GUID引用命令",
+                          "Payload": "hmt+voice=info",
+                          "Template": "hmt+voice=info",
+                          "LastUsedAt": "",
+                          "Variables": [],
+                          "VariableSets": [],
+                          "SelectedVariableSetId": ""
+                        }
+                      ]
+                    }
+                  ]
+                }
+                """;
+            await File.WriteAllTextAsync(filePath, json, Encoding.UTF8);
+
+            JsonDeviceProfileStore store = new(directory);
+            IReadOnlyList<DeviceProfile> loadedProfiles = await store.LoadAllAsync();
+
+            DeviceProfile loaded = Assert.Single(loadedProfiles);
+            Assert.Empty(store.LastLoadWarnings);
+            QuickCommand loadedCommand = Assert.Single(loaded.CommandGroups[0].Commands);
+            Assert.Equal("空GUID引用命令", loadedCommand.Name);
+            Assert.Null(loadedCommand.SelectedVariableSetId);
+            Assert.Null(loadedCommand.LastUsedAt);
+
+            DeviceProfile imported = await new DeviceProfileFileService().ImportAsync(filePath);
+            QuickCommand importedCommand = Assert.Single(imported.CommandGroups[0].Commands);
+            Assert.NotEqual(loaded.Id, imported.Id);
+            Assert.Null(importedCommand.SelectedVariableSetId);
+            Assert.Null(importedCommand.LastUsedAt);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    /// <summary>
+    /// @brief 验证损坏的配置 JSON 会在加载后记录警告信息，且不影响无关 JSON 文件
+    /// </summary>
+    [Fact]
+    public async Task ProfileStoreRecordsWarningsForMalformedProfileJson()
+    {
+        string directory = CreateTemporaryDirectory();
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, "settings.json"),
+                "{\"TerminalFontSize\":14}");
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, "损坏设备.json"),
+                """
+                {
+                  "SchemaVersion": 1,
+                  "Id": "7bdb85f2-790a-4f9b-8447-e3048a0f6271",
+                  "Name": "损坏设备",
+                  "Transport": { "$type": "serial", "Kind": "Serial" },
+                  "CommandGroups": [
+                    {
+                      "Name": "串口指令",
+                      "Category": "Serial",
+                      "Commands": [
+                        {
+                          "Name": "非法GUID",
+                          "SelectedVariableSetId": "not-a-guid"
+                        }
+                      ]
+                    }
+                  ]
+                }
+                """);
+
+            JsonDeviceProfileStore store = new(directory);
+            IReadOnlyList<DeviceProfile> loaded = await store.LoadAllAsync();
+
+            Assert.Empty(loaded);
+            string warning = Assert.Single(store.LastLoadWarnings);
+            Assert.Contains("损坏设备.json", warning);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    /// <summary>
+    /// @brief 验证导入设备配置 JSON 后自动切换到新导入的设备
+    /// </summary>
+    [Fact]
+    public async Task ImportDeviceProfilesSelectsLastImportedProfile()
+    {
+        string directory = CreateTemporaryDirectory();
+        string exportPath = Path.Combine(directory, "待导入设备.json");
+        string storeDirectory = Path.Combine(directory, "Store");
+        Directory.CreateDirectory(storeDirectory);
+
+        DeviceProfileFileService fileService = new();
+        DeviceProfile existing = new() { Name = "原有设备" };
+        DeviceProfile incoming = new()
+        {
+            Name = "新导入设备",
+            CommandGroups =
+            [
+                new QuickCommandGroup
+                {
+                    Category = QuickCommandCategory.Serial,
+                    Commands = [new QuickCommand { Name = "状态查询", Payload = "AT", LineEnding = "CRLF" }]
+                }
+            ]
+        };
+        JsonDeviceProfileStore store = new(storeDirectory);
+        await store.SaveAsync(existing);
+        await fileService.ExportAsync(incoming, exportPath);
+
+        using OnlineUpdateService updateService = new(currentVersion: new Version(1, 0, 0));
+        MainWindowViewModel viewModel = new(
+            store,
+            new LegacyConfigImporter(),
+            new AppSettingsStore(Path.Combine(directory, "settings.json")),
+            fileService,
+            new CaptureFileReader(),
+            updateService,
+            new BleDiscoveryService(),
+            new BleGattBrowserService());
+
+        try
+        {
+            // 先选中原有设备，模拟软件运行中已打开其它设备配置。
+            viewModel.Profiles.Add(existing);
+            viewModel.SelectedProfile = existing;
+            Assert.Equal(existing.Id, viewModel.SelectedProfile.Id);
+
+            await viewModel.ImportDeviceProfilesAsync([exportPath]);
+
+            Assert.NotNull(viewModel.SelectedProfile);
+            Assert.Equal("新导入设备", viewModel.SelectedProfile!.Name);
+            QuickCommandItemViewModel command = Assert.Single(viewModel.QuickCommands);
+            Assert.Equal("状态查询", command.Name);
+        }
+        finally
+        {
+            await viewModel.DisposeAsync();
+            Directory.Delete(directory, true);
+        }
+    }
+
+    /// <summary>
+    /// @brief 验证打开配置文件夹时能够定位当前选中设备的 JSON 文件并在未选中时回退到目录本身
+    /// </summary>
+    [Fact]
+    public async Task ResolveProfileFolderTargetAndStartInfoMatchesSelectedAndEmptyStates()
+    {
+        string directory = CreateTemporaryDirectory();
+        string storeDirectory = Path.Combine(directory, "Profiles");
+        DeviceProfile profile = new() { Name = "测试定位设备" };
+        JsonDeviceProfileStore store = new(storeDirectory);
+        await store.SaveAsync(profile);
+
+        using OnlineUpdateService updateService = new(currentVersion: new Version(1, 0, 0));
+        MainWindowViewModel viewModel = new(
+            store,
+            new LegacyConfigImporter(),
+            new AppSettingsStore(Path.Combine(directory, "settings.json")),
+            new DeviceProfileFileService(),
+            new CaptureFileReader(),
+            updateService,
+            new BleDiscoveryService(),
+            new BleGattBrowserService());
+
+        try
+        {
+            // 选中已保存设备时应解析到具体 JSON 文件并使用 /select 定位。
+            viewModel.Profiles.Add(profile);
+            viewModel.SelectedProfile = profile;
+            (string resolvedDir, string? selectedFile) = await viewModel.ResolveProfileFolderTargetAsync();
+            Assert.Equal(Path.GetFullPath(storeDirectory), resolvedDir);
+            Assert.NotNull(selectedFile);
+            Assert.True(File.Exists(selectedFile));
+            Assert.Equal("测试定位设备.json", Path.GetFileName(selectedFile));
+
+            ProcessStartInfo selectInfo = MainWindowViewModel.BuildProfileFolderStartInfo(resolvedDir, selectedFile);
+            Assert.Equal("explorer.exe", selectInfo.FileName);
+            Assert.Equal($"/select,\"{selectedFile}\"", selectInfo.Arguments);
+            Assert.True(selectInfo.UseShellExecute);
+
+            // 未选中任何设备且目录被删后，应自动重建目录并直接打开文件夹。
+            viewModel.SelectedProfile = null;
+            Directory.Delete(storeDirectory, true);
+            (string fallbackDir, string? fallbackFile) = await viewModel.ResolveProfileFolderTargetAsync();
+            Assert.Equal(Path.GetFullPath(storeDirectory), fallbackDir);
+            Assert.True(Directory.Exists(fallbackDir));
+            Assert.Null(fallbackFile);
+
+            ProcessStartInfo folderInfo = MainWindowViewModel.BuildProfileFolderStartInfo(fallbackDir, fallbackFile);
+            Assert.Equal(fallbackDir, folderInfo.FileName);
+            Assert.True(string.IsNullOrEmpty(folderInfo.Arguments));
+            Assert.True(folderInfo.UseShellExecute);
+        }
+        finally
+        {
+            await viewModel.DisposeAsync();
+            Directory.Delete(directory, true);
         }
     }
 

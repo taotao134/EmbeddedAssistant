@@ -1,17 +1,11 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using DeviceDebugStudio.Core.Profiles;
 
 namespace DeviceDebugStudio.Infrastructure.Persistence;
 
 public sealed class DeviceProfileFileService
 {
-    private readonly JsonSerializerOptions _options = new()
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true,
-        Converters = { new JsonStringEnumConverter() }
-    };
+    private readonly JsonSerializerOptions _options = DeviceProfileJsonSerializer.CreateOptions();
 
     public async Task<DeviceProfile> ImportAsync(string path, CancellationToken cancellationToken = default)
     {

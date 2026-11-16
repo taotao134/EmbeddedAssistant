@@ -636,6 +636,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         DebugLoggingEnabled = settings.DebugLoggingEnabled;
         UpdateAvailableTransportOptions();
         await ReloadProfilesAsync(settings.SelectedProfileId).ConfigureAwait(true);
+        if (_profileStore is JsonDeviceProfileStore jsonStore && jsonStore.LastLoadWarnings.Count > 0)
+        {
+            StatusText = $"部分配置加载失败（{jsonStore.LastLoadWarnings.Count} 个）：{jsonStore.LastLoadWarnings[0]}";
+        }
         if (Profiles.Count == 0)
         {
             DeviceProfile profile = new()
@@ -837,15 +841,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IsBusy = true;
         try
         {
+            await SaveActiveProfileSnapshotAsync(showStatus: false).ConfigureAwait(true);
             int count = 0;
+            Guid? lastImportedId = null;
             foreach (string path in paths)
             {
                 string sourcePath = Path.GetFullPath(path);
                 DeviceProfile profile = await _profileFileService.ImportAsync(sourcePath).ConfigureAwait(true);
                 await _profileStore.SaveAsync(profile).ConfigureAwait(true);
+                lastImportedId = profile.Id;
                 count++;
             }
-            await ReloadProfilesAsync().ConfigureAwait(true);
+            await ReloadProfilesAsync(lastImportedId).ConfigureAwait(true);
             await SaveAppSettingsAsync().ConfigureAwait(true);
             StatusText = $"已导入 {count} 个设备配置到：{_profileStore.DirectoryPath}";
         }
@@ -857,6 +864,77 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             IsBusy = false;
         }
+    }
+
+    /// <summary>
+    /// @brief 打开当前配置 JSON 所在文件夹，并尽量在资源管理器中选中当前设备配置文件
+    /// @return 表示异步操作完成的任务
+    /// </summary>
+    public async Task OpenProfileFolderAsync()
+    {
+        try
+        {
+            (string directory, string? selectedFilePath) = await ResolveProfileFolderTargetAsync().ConfigureAwait(true);
+            ProcessStartInfo startInfo = BuildProfileFolderStartInfo(directory, selectedFilePath);
+            Process.Start(startInfo);
+            StatusText = selectedFilePath is not null
+                ? $"已打开配置文件夹并定位：{Path.GetFileName(selectedFilePath)}"
+                : $"已打开配置文件夹：{directory}";
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(exception, "打开配置文件夹失败");
+            StatusText = $"配置文件夹打开失败：{exception.Message}";
+        }
+    }
+
+    /// <summary>
+    /// @brief 解析当前配置目录路径及当前选中设备的 JSON 文件路径
+    /// @return 配置目录完整路径与匹配到的设备配置文件路径（未找到或未落盘时为 null）
+    /// </summary>
+    public async Task<(string Directory, string? SelectedFilePath)> ResolveProfileFolderTargetAsync()
+    {
+        string rawDirectory = !string.IsNullOrWhiteSpace(_profileStore.DirectoryPath)
+            ? _profileStore.DirectoryPath
+            : !string.IsNullOrWhiteSpace(ProfileDirectory)
+                ? ProfileDirectory
+                : AppPaths.ProfilesDirectory;
+        string directory = Path.GetFullPath(rawDirectory);
+        Directory.CreateDirectory(directory);
+
+        string? selectedFilePath = null;
+        if (SelectedProfile is not null && _profileStore is JsonDeviceProfileStore jsonStore)
+        {
+            string? candidate = await jsonStore.FindProfilePathAsync(SelectedProfile.Id).ConfigureAwait(true);
+            if (!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate))
+            {
+                selectedFilePath = candidate;
+            }
+        }
+
+        return (directory, selectedFilePath);
+    }
+
+    /// <summary>
+    /// @brief 构造在系统文件资源管理器中打开配置文件夹的进程启动参数
+    /// @param directory 配置文件夹完整路径
+    /// @param selectedFilePath 可选的当前设备配置文件路径，存在时直接选中该文件
+    /// @return 用于启动资源管理器的 ProcessStartInfo 实例
+    /// </summary>
+    public static ProcessStartInfo BuildProfileFolderStartInfo(string directory, string? selectedFilePath)
+    {
+        if (!string.IsNullOrWhiteSpace(selectedFilePath) && File.Exists(selectedFilePath))
+        {
+            return new ProcessStartInfo("explorer.exe", $"/select,\"{selectedFilePath}\"")
+            {
+                UseShellExecute = true
+            };
+        }
+
+        return new ProcessStartInfo(directory)
+        {
+            UseShellExecute = true
+        };
     }
 
     public string BuildAiImportPrompt(string projectDirectory)
@@ -4293,6 +4371,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         Guid? selectedId = preferredId ?? SelectedProfile?.Id;
         IReadOnlyList<DeviceProfile> profiles = await _profileStore.LoadAllAsync().ConfigureAwait(true);
+        if (_profileStore is JsonDeviceProfileStore jsonStore && jsonStore.LastLoadWarnings.Count > 0)
+        {
+            foreach (string warning in jsonStore.LastLoadWarnings)
+            {
+                Log.Warning("加载设备配置失败 | {Warning}", warning);
+            }
+        }
         _suppressProfileSelection = true;
         try
         {

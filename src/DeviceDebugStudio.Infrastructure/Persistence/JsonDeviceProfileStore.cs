@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using DeviceDebugStudio.Core.Profiles;
 
 namespace DeviceDebugStudio.Infrastructure.Persistence;
@@ -8,12 +7,10 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
 {
     private string _directory;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly JsonSerializerOptions _options = new(JsonSerializerDefaults.General)
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true,
-        Converters = { new JsonStringEnumConverter() }
-    };
+    private readonly JsonSerializerOptions _options = DeviceProfileJsonSerializer.CreateOptions();
+
+    /// <summary>最近一次加载配置目录时记录的错误或跳过说明</summary>
+    public IReadOnlyList<string> LastLoadWarnings { get; private set; } = [];
 
     public JsonDeviceProfileStore(string? directory = null)
     {
@@ -41,24 +38,28 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
         try
         {
             List<(DeviceProfile Profile, string Path)> profileFiles = [];
+            List<string> loadWarnings = [];
             foreach (string file in Directory.EnumerateFiles(_directory, "*.json").OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
             {
                 try
                 {
-                    DeviceProfile? profile = await TryReadProfileAsync(file, cancellationToken).ConfigureAwait(false);
+                    DeviceProfile? profile = await TryReadProfileAsync(file, loadWarnings, cancellationToken).ConfigureAwait(false);
                     if (profile is not null)
                     {
                         profileFiles.Add((profile, file));
                     }
                 }
-                catch (JsonException)
+                catch (JsonException exception)
                 {
+                    loadWarnings.Add($"配置文件“{Path.GetFileName(file)}”JSON 格式无效：{exception.Message}");
                 }
-                catch (IOException)
+                catch (IOException exception)
                 {
+                    loadWarnings.Add($"配置文件“{Path.GetFileName(file)}”读取失败：{exception.Message}");
                 }
             }
 
+            LastLoadWarnings = loadWarnings;
             List<(DeviceProfile Profile, string Path)> latestProfiles = profileFiles
                 .GroupBy(item => item.Profile.Id)
                 .Select(group => group.OrderByDescending(item => item.Profile.UpdatedAt).First())
@@ -76,7 +77,10 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
         }
     }
 
-    private async Task<DeviceProfile?> TryReadProfileAsync(string path, CancellationToken cancellationToken)
+    private async Task<DeviceProfile?> TryReadProfileAsync(
+        string path,
+        List<string> loadWarnings,
+        CancellationToken cancellationToken)
     {
         await using FileStream stream = File.OpenRead(path);
         using JsonDocument document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -91,9 +95,19 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
         }
 
         DeviceProfile? profile = JsonSerializer.Deserialize<DeviceProfile>(root.GetRawText(), _options);
-        return profile is not null && profile.SchemaVersion <= DeviceProfile.CurrentSchemaVersion
-            ? profile
-            : null;
+        if (profile is null)
+        {
+            loadWarnings.Add($"配置文件“{Path.GetFileName(path)}”内容为空。");
+            return null;
+        }
+
+        if (profile.SchemaVersion > DeviceProfile.CurrentSchemaVersion)
+        {
+            loadWarnings.Add($"配置文件“{Path.GetFileName(path)}”版本 {profile.SchemaVersion} 高于当前支持版本 {DeviceProfile.CurrentSchemaVersion}。");
+            return null;
+        }
+
+        return profile;
     }
 
     private static bool HasProperty(JsonElement element, string name) =>
@@ -136,6 +150,31 @@ public sealed class JsonDeviceProfileStore : IConfigurableDeviceProfileStore
             {
                 File.Delete(path);
             }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// @brief 查找指定设备配置当前对应的磁盘 JSON 文件路径
+    /// @param profileId 设备配置唯一标识
+    /// @param cancellationToken 异步取消令牌
+    /// @return 匹配的配置文件完整路径；若尚未保存或未找到则返回 null
+    /// </summary>
+    public async Task<string?> FindProfilePathAsync(Guid profileId, CancellationToken cancellationToken = default)
+    {
+        if (!Directory.Exists(_directory))
+        {
+            return null;
+        }
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            List<string> paths = await FindProfilePathsAsync(profileId, cancellationToken).ConfigureAwait(false);
+            return paths.Count > 0 ? paths[0] : null;
         }
         finally
         {

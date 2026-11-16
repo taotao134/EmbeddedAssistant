@@ -1,12 +1,14 @@
 using System.ComponentModel;
 using System.Collections.Specialized;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -1427,6 +1429,11 @@ public partial class MainWindow : FluentWindow
             UpdateTerminalColumnWidths();
             UpdateFrameColumnWidths();
         }
+        else if (e.PropertyName == nameof(MainWindowViewModel.SelectedProfile)
+            && _viewModel.SelectedProfile is { } selectedProfile)
+        {
+            ProfilesList.ScrollIntoView(selectedProfile);
+        }
         else if (e.PropertyName == nameof(MainWindowViewModel.SelectedQuickCommand))
         {
             if (_viewModel.SelectedQuickCommand is null)
@@ -2687,6 +2694,11 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    private async void OnOpenProfileFolderClick(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.OpenProfileFolderAsync();
+    }
+
     private async void OnOpenCaptureClick(object sender, RoutedEventArgs e)
     {
         OpenFileDialog dialog = new()
@@ -3331,6 +3343,11 @@ public partial class MainWindow : FluentWindow
         EnforcePanelLayout();
     }
 
+    private const int SwRestore = 9;
+
+    /// <summary>
+    /// @brief 打开快捷指令窗口；若窗口已打开或处于最小化/后台状态，则将其恢复并置前激活
+    /// </summary>
     private void ShowQuickCommandWindow()
     {
         if (_quickCommandWindow is null)
@@ -3340,13 +3357,79 @@ public partial class MainWindow : FluentWindow
             PositionToolWindow(_quickCommandWindow, 1040, 680);
             _quickCommandWindow.Show();
         }
-        else if (!_quickCommandWindow.IsVisible)
+
+        QuickCommandWindow window = _quickCommandWindow;
+        BringWindowToFront(window);
+
+        // 工具栏按钮点击消息结束时，WPF 可能仍将焦点保留在主窗口，在 Input 优先级复核并推至最前。
+        _ = Dispatcher.BeginInvoke(
+            DispatcherPriority.Input,
+            new Action(() =>
+            {
+                if (!_closing && ReferenceEquals(_quickCommandWindow, window))
+                {
+                    nint handle = new WindowInteropHelper(window).Handle;
+                    if (handle == 0 || GetForegroundWindow() != handle)
+                    {
+                        BringWindowToFront(window);
+                    }
+                }
+            }));
+    }
+
+    /// <summary>
+    /// @brief 将目标窗口从隐藏、最小化或后台遮挡状态恢复并置顶显示到最前面
+    /// @param window 需要前置显示的目标窗口
+    /// </summary>
+    internal static void BringWindowToFront(Window window)
+    {
+        if (!window.IsVisible)
         {
-            _quickCommandWindow.Show();
+            window.Show();
         }
 
-        _quickCommandWindow.Activate();
+        nint handle = new WindowInteropHelper(window).Handle;
+        if (window.WindowState == WindowState.Minimized)
+        {
+            if (handle != 0)
+            {
+                _ = ShowWindow(handle, SwRestore);
+            }
+
+            if (window.WindowState == WindowState.Minimized)
+            {
+                window.WindowState = WindowState.Normal;
+            }
+        }
+
+        if (!window.Topmost)
+        {
+            // 先短暂置顶再取消，穿透同进程最大化主窗口或其它窗口的 Z-order 遮挡。
+            window.Topmost = true;
+            window.Topmost = false;
+        }
+
+        if (handle != 0)
+        {
+            _ = BringWindowToTop(handle);
+            _ = SetForegroundWindow(handle);
+        }
+
+        window.Activate();
+        window.Focus();
     }
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(nint hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(nint hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(nint hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
 
     private void PositionToolWindow(Window window, double width, double height)
     {

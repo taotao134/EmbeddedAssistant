@@ -102,6 +102,11 @@ public partial class DeviceWorkspaceWindow : FluentWindow
         }
     }
 
+    private async void OnOpenProfileFolderClick(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.OpenProfileFolderAsync();
+    }
+
     private async void OnOpenCaptureClick(object sender, RoutedEventArgs e)
     {
         OpenFileDialog dialog = new()
